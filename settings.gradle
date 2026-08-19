@@ -1,0 +1,4 @@
+rootProject.name = 'throttl'
+
+include 'rate-limiter-service'
+include 'demo-client'
