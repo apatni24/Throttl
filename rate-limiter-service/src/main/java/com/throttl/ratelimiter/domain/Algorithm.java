@@ -1,5 +1,6 @@
 package com.throttl.ratelimiter.domain;
 
 public enum Algorithm {
-    TOKEN_BUCKET
+    TOKEN_BUCKET,
+    SLIDING_WINDOW
 }

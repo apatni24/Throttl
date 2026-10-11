@@ -6,15 +6,24 @@ Token-bucket state is read and written on every check. Redis keeps that state in
 
 ## Why Lua?
 
-A refill-and-consume cycle is several steps: read tokens, compute elapsed time, refill, cap, consume, write. If those steps run as separate Redis commands, two checkers can both observe `tokens=1` and both allow. Lua runs inside Redis against one key as a single atomic script, so concurrent requests cannot double-spend. When several policies match one request, `token_bucket_and.lua` evaluates every bucket in the same script and consumes tokens from all of them only if every bucket would allow.
+A refill-and-consume cycle is several steps: read tokens, compute elapsed time, refill, cap, consume, write. If those steps run as separate Redis commands, two checkers can both observe `tokens=1` and both allow. Lua runs inside Redis against one key as a single atomic script, so concurrent requests cannot double-spend. When several policies match one request, `rate_limit.lua` evaluates every bucket in the same script, whatever its algorithm, and consumes from all of them only if every bucket would allow.
 
 ## Why PostgreSQL?
 
-Policies change rarely and must survive process restarts. PostgreSQL is the source of truth for configuration. JSONB columns hold `conditions` and algorithm `configuration` so adding Sliding Window later does not require new columns.
+Policies change rarely and must survive process restarts. PostgreSQL is the source of truth for configuration. JSONB columns hold `conditions` and algorithm `configuration`; adding the sliding window needed no schema change.
 
-## Why Token Bucket?
+## Why token bucket and sliding window?
 
-Token bucket models both a burst (`capacity`) and a sustained rate (`refillRate` / `refillPeriod`) with one piece of state. That matches API quotas: allow a short spike, then settle to a steady rate. Sliding and fixed windows can be added behind the same `RateLimitAlgorithm` interface when a product need appears.
+They answer different product questions, so a policy picks one.
+
+- **Token bucket** (`capacity`, `refillRate`, `refillPeriod`) answers "allow a spike, then settle to a steady rate". It is the right default for API quotas where short bursts are fine. Two fields of state per key.
+- **Sliding window counter** (`limit`, `window`) answers "never more than N in any trailing window". A token bucket of capacity 100 refilling 100/min admits up to 200 in one minute across a refill boundary; a fixed window admits up to 2N across a window edge. Contracts and abuse limits ("5 login attempts per minute") need the stricter guarantee. Three fields of state per key: window start, current count, previous count.
+
+The sliding window is the counter approximation, not a log of timestamps: the trailing count is `previous × (unexpired fraction) + current`. It is O(1) memory per key instead of O(N), and it assumes requests in the previous window were evenly spread. Cloudflare measured this approximation at about 0.003% wrongly allowed or denied requests on real traffic; the cost of an exact log (a sorted set per key, trimmed on every check) is not worth that difference here.
+
+Windows are aligned to the epoch and `now` comes from Redis `TIME`. A stored window start that is ahead of `now` (possible after a failover to a replica whose clock is behind) is kept rather than rolled backwards, so a clock step cannot reset a window and re-admit a full quota.
+
+`retryAfterMs` is exact for both algorithms: it is the earliest moment the next request would be allowed if nobody else consumed. For the sliding window that means solving for when the previous window's weight decays enough, possibly after the next rollover. `SlidingWindowMathTest` checks that a request at `retryAfter` is allowed and one at `retryAfter - 1` is not over 500 randomized traces. The formulas are arranged so integer inputs produce exact doubles; the first version computed `W × (1 - (L-r)/c)`, rounded `50` to `50.00000000000004`, and reported a retry 1 ms late.
 
 ## Why does "now" come from Redis?
 
@@ -58,7 +67,9 @@ Caffeine is per process. Invalidating only the instance that handled `PUT /v1/po
 
 ## Why separate policy configuration from algorithm implementation?
 
-Matching (who/what is limited) is independent of how tokens refill. Policies persist as data; algorithms are code. The check path resolves policies, then dispatches to `TokenBucketAlgorithm`. A later `SlidingWindowAlgorithm` plugs in without rewriting the API or the table.
+Matching (who/what is limited) is independent of how capacity is counted. Policies persist as data; algorithms are code. In Java, `LimitConfiguration` is a sealed interface (`TokenBucketConfiguration`, `SlidingWindowConfiguration`), so every `switch` over it is checked for exhaustiveness at compile time and adding a third algorithm fails the build until mapping, validation, and Lua argument encoding handle it.
+
+Dispatch does not happen in Java, though. An earlier plan had one `RateLimitAlgorithm` class per algorithm, but a request can match a token-bucket policy and a sliding-window policy at once, and the all-or-nothing guarantee only holds if both are decided in one atomic script. So `rate_limit.lua` takes an algorithm code per key and branches inside Redis; `RedisRateLimiter` only encodes arguments. The refund script used by the cross-slot path is algorithm-aware the same way (add tokens back, or decrement the window count).
 
 ## Why a Lettuce connection pool (not async rewrite)?
 

@@ -1,5 +1,5 @@
 export type Scope = 'USER' | 'TENANT' | 'API' | 'IP'
-export type Algorithm = 'TOKEN_BUCKET'
+export type Algorithm = 'TOKEN_BUCKET' | 'SLIDING_WINDOW'
 export type RefillPeriod = 'SECOND' | 'MINUTE' | 'HOUR'
 
 export type TokenBucketConfiguration = {
@@ -8,6 +8,15 @@ export type TokenBucketConfiguration = {
   refillPeriod: RefillPeriod
 }
 
+export type SlidingWindowConfiguration = {
+  limit: number
+  window: RefillPeriod
+}
+
+export type Strategy =
+  | { algorithm: 'TOKEN_BUCKET'; configuration: TokenBucketConfiguration }
+  | { algorithm: 'SLIDING_WINDOW'; configuration: SlidingWindowConfiguration }
+
 export type Policy = {
   id: string
   name: string
@@ -15,10 +24,7 @@ export type Policy = {
     scope: Scope
     conditions: Record<string, string>
   }
-  strategy: {
-    algorithm: Algorithm
-    configuration: TokenBucketConfiguration
-  }
+  strategy: Strategy
   metadata: {
     enabled: boolean
     priority: number

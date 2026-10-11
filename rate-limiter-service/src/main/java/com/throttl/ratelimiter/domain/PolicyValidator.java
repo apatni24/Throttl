@@ -60,13 +60,29 @@ public final class PolicyValidator {
         if (strategy.algorithm() == null) {
             throw new PolicyValidationException("Invalid algorithm");
         }
-        if (strategy.algorithm() != Algorithm.TOKEN_BUCKET) {
-            throw new PolicyValidationException("Unsupported algorithm: " + strategy.algorithm());
-        }
-        TokenBucketConfiguration configuration = strategy.configuration();
-        if (configuration == null) {
+        if (strategy.configuration() == null) {
             throw new PolicyValidationException("Missing configuration");
         }
+        switch (strategy.configuration()) {
+            case TokenBucketConfiguration tokenBucket -> {
+                requireAlgorithm(strategy, Algorithm.TOKEN_BUCKET);
+                validateTokenBucket(tokenBucket);
+            }
+            case SlidingWindowConfiguration slidingWindow -> {
+                requireAlgorithm(strategy, Algorithm.SLIDING_WINDOW);
+                validateSlidingWindow(slidingWindow);
+            }
+        }
+    }
+
+    private static void requireAlgorithm(LimitingStrategy strategy, Algorithm expected) {
+        if (strategy.algorithm() != expected) {
+            throw new PolicyValidationException(
+                    "Configuration does not match algorithm " + strategy.algorithm());
+        }
+    }
+
+    private static void validateTokenBucket(TokenBucketConfiguration configuration) {
         if (configuration.capacity() <= 0) {
             throw new PolicyValidationException("Capacity must be greater than 0");
         }
@@ -75,6 +91,15 @@ public final class PolicyValidator {
         }
         if (configuration.refillPeriod() == null) {
             throw new PolicyValidationException("Invalid refill period");
+        }
+    }
+
+    private static void validateSlidingWindow(SlidingWindowConfiguration configuration) {
+        if (configuration.limit() <= 0) {
+            throw new PolicyValidationException("Limit must be greater than 0");
+        }
+        if (configuration.window() == null) {
+            throw new PolicyValidationException("Invalid window");
         }
     }
 

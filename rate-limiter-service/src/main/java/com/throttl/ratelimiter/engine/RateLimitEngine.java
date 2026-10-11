@@ -2,7 +2,6 @@ package com.throttl.ratelimiter.engine;
 
 import com.throttl.ratelimiter.api.dto.RateLimitCheckRequest;
 import com.throttl.ratelimiter.config.RateLimiterProperties;
-import com.throttl.ratelimiter.domain.Algorithm;
 import com.throttl.ratelimiter.domain.Policy;
 import com.throttl.ratelimiter.metrics.RateLimitMetrics;
 import com.throttl.ratelimiter.resolver.PolicyResolver;
@@ -21,18 +20,18 @@ public class RateLimitEngine {
     private static final Logger log = LoggerFactory.getLogger(RateLimitEngine.class);
 
     private final PolicyCatalog policyCatalog;
-    private final TokenBucketAlgorithm tokenBucketAlgorithm;
+    private final RedisRateLimiter redisRateLimiter;
     private final RateLimitMetrics metrics;
     private final RateLimiterProperties properties;
 
     public RateLimitEngine(
             PolicyCatalog policyCatalog,
-            TokenBucketAlgorithm tokenBucketAlgorithm,
+            RedisRateLimiter redisRateLimiter,
             RateLimitMetrics metrics,
             RateLimiterProperties properties
     ) {
         this.policyCatalog = policyCatalog;
-        this.tokenBucketAlgorithm = tokenBucketAlgorithm;
+        this.redisRateLimiter = redisRateLimiter;
         this.metrics = metrics;
         this.properties = properties;
     }
@@ -69,10 +68,9 @@ public class RateLimitEngine {
 
         List<String> bucketKeys = new ArrayList<>(applicable.size());
         for (Policy policy : applicable) {
-            algorithmFor(policy);
             bucketKeys.add(PolicyResolver.bucketKey(policy, request));
         }
-        List<RateLimitDecision> outcomes = tokenBucketAlgorithm.evaluateAll(applicable, bucketKeys);
+        List<RateLimitDecision> outcomes = redisRateLimiter.evaluateAll(applicable, bucketKeys);
         return assemble(applicable, outcomes);
     }
 
@@ -86,10 +84,9 @@ public class RateLimitEngine {
         }
         List<String> bucketKeys = new ArrayList<>(applicable.size());
         for (Policy policy : applicable) {
-            algorithmFor(policy);
             bucketKeys.add(PolicyResolver.bucketKey(policy, request));
         }
-        return tokenBucketAlgorithm.evaluateAllReactive(applicable, bucketKeys)
+        return redisRateLimiter.evaluateAllReactive(applicable, bucketKeys)
                 .map(outcomes -> assemble(applicable, outcomes));
     }
 
@@ -143,12 +140,5 @@ public class RateLimitEngine {
             return RateLimitDecision.deny(0, 0, "redis-unavailable");
         }
         throw ex;
-    }
-
-    private RateLimitAlgorithm algorithmFor(Policy policy) {
-        if (policy.strategy().algorithm() == Algorithm.TOKEN_BUCKET) {
-            return tokenBucketAlgorithm;
-        }
-        throw new IllegalStateException("Unsupported algorithm: " + policy.strategy().algorithm());
     }
 }

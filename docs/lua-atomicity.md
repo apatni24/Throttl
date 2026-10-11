@@ -13,7 +13,7 @@ if tokens > 0
   ALLOW
 ```
 
-`TokenBucketAlgorithm` (production) runs the same math inside `redis/token_bucket.lua` with `EVAL`, so Redis executes the whole cycle atomically.
+`RedisRateLimiter` (production) runs the same math inside `redis/rate_limit.lua` with `EVAL`, so Redis executes the whole cycle atomically.
 
 Run both against the same Redis:
 

@@ -2,7 +2,7 @@
 
 A production-style rate-limiting service that multiple application instances can call for low-latency, shared decisions.
 
-PostgreSQL stores policies. Redis stores token-bucket state. A Lua script makes refill-and-consume atomic. Several limiter processes sit in front of the same Redis, so the limit is global.
+PostgreSQL stores policies. Redis stores limiter state (token buckets and sliding windows). A Lua script makes check-and-consume atomic. Several limiter processes sit in front of the same Redis, so the limit is global.
 
 ## Problem
 
@@ -22,7 +22,7 @@ In-process rate limiters do not work once traffic is spread across instances. Ea
                     ┌─────────────────────────┐
                     │    Rate Limit Service   │
                     │  REST → Policy Engine   │
-                    │       → Token Bucket    │
+                    │  → Bucket/Window (Lua)  │
                     │       → Policy Cache    │
                     └──────┬─────────┬────────┘
                            │         │
@@ -46,7 +46,7 @@ A policy has four parts:
 | Strategy | `algorithm` + algorithm-specific `configuration` |
 | Metadata | `enabled`, `priority`, timestamps |
 
-MVP algorithm: **TOKEN_BUCKET** only. Capacity, refill rate, and refill period live inside `strategy.configuration`, not as top-level columns.
+Algorithms: **TOKEN_BUCKET** and **SLIDING_WINDOW**. Algorithm-specific fields live inside `strategy.configuration`, not as top-level columns.
 
 Example:
 
@@ -70,13 +70,21 @@ Example:
 }
 ```
 
-## Token bucket
+## Algorithms
 
-A bucket starts full (`capacity` tokens). Each allowed request consumes one token. Tokens refill at `refillRate` per `refillPeriod`, capped at capacity. When empty, the check is denied and `retryAfterMs` is the time until the next refill.
+**Token bucket** (`capacity`, `refillRate`, `refillPeriod`). A bucket starts full. Each allowed request consumes one token. Tokens refill at `refillRate` per `refillPeriod`, capped at capacity. Use it when short bursts are fine.
+
+**Sliding window counter** (`limit`, `window`). At most `limit` requests in any trailing `window`, estimated as `previous × unexpired fraction + current`. There is no 2× burst at window edges. Use it for contractual or abuse limits.
+
+```json
+"strategy": { "algorithm": "SLIDING_WINDOW", "configuration": { "limit": 5, "window": "MINUTE" } }
+```
+
+Either way, a denial carries `retryAfterMs`: the earliest time the next request would be allowed.
 
 ## Redis and Lua
 
-Runtime keys look like `rl:{SCOPE:value}:policyId` (for example `rl:{USER:u123}:payment-user-limit`) and store a hash of `tokens` and `lastRefillTimestamp`. The Lua script reads, refills, consumes, and writes in one Redis execution so two concurrent checks cannot both spend the last token.
+Runtime keys look like `rl:{SCOPE:value}:policyId` (for example `rl:{USER:u123}:payment-user-limit`) and store a hash: `tokens` and `lastRefillTimestamp` for a token bucket, `windowStart`, `current`, and `previous` for a sliding window. `rate_limit.lua` reads, refills or rolls, checks, consumes, and writes every matching key in one Redis execution, so two concurrent checks cannot both spend the last unit, and a request matching policies of both algorithms is still all-or-nothing.
 
 The script reads "now" from Redis `TIME`, not from the limiter JVM, so every instance refills against one clock.
 

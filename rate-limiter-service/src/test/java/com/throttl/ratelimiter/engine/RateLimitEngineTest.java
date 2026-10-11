@@ -27,7 +27,7 @@ class RateLimitEngineTest {
     @Test
     void failClosedWhenRedisThrows() {
         PolicyCatalog catalog = mock(PolicyCatalog.class);
-        TokenBucketAlgorithm algorithm = mock(TokenBucketAlgorithm.class);
+        RedisRateLimiter algorithm = mock(RedisRateLimiter.class);
         when(catalog.enabledPolicies()).thenReturn(List.of(policy()));
         when(algorithm.evaluateAll(any(), any())).thenThrow(new RuntimeException("Redis down"));
 
@@ -46,7 +46,7 @@ class RateLimitEngineTest {
     @Test
     void failClosedWhenReactiveRedisThrows() {
         PolicyCatalog catalog = mock(PolicyCatalog.class);
-        TokenBucketAlgorithm algorithm = mock(TokenBucketAlgorithm.class);
+        RedisRateLimiter algorithm = mock(RedisRateLimiter.class);
         when(catalog.enabledPoliciesAsync()).thenReturn(reactor.core.publisher.Mono.just(List.of(policy())));
         when(algorithm.evaluateAllReactive(any(), any()))
                 .thenReturn(reactor.core.publisher.Mono.error(new RuntimeException("Redis down")));
@@ -70,7 +70,7 @@ class RateLimitEngineTest {
         when(catalog.enabledPolicies()).thenReturn(List.of());
         RateLimitEngine engine = new RateLimitEngine(
                 catalog,
-                mock(TokenBucketAlgorithm.class),
+                mock(RedisRateLimiter.class),
                 new RateLimitMetrics(new SimpleMeterRegistry()),
                 new RateLimiterProperties()
         );

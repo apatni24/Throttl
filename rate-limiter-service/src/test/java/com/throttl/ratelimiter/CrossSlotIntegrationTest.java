@@ -8,6 +8,7 @@ import com.throttl.ratelimiter.domain.Policy;
 import com.throttl.ratelimiter.domain.PolicyMetadata;
 import com.throttl.ratelimiter.domain.RefillPeriod;
 import com.throttl.ratelimiter.domain.Scope;
+import com.throttl.ratelimiter.domain.SlidingWindowConfiguration;
 import com.throttl.ratelimiter.domain.TokenBucketConfiguration;
 import com.throttl.ratelimiter.engine.PolicyCatalog;
 import com.throttl.ratelimiter.engine.RateLimitDecision;
@@ -167,17 +168,45 @@ class CrossSlotIntegrationTest {
         assertThat(tokens(TENANT_KEY)).isEqualTo(50 - allowed.get());
     }
 
+    @Test
+    void slidingWindowSlotIsRefundedWhenTokenBucketSlotDenies() {
+        createPolicy("cross-user-limit", Scope.USER,
+                new LimitingStrategy(Algorithm.SLIDING_WINDOW, new SlidingWindowConfiguration(100, RefillPeriod.HOUR)));
+        createPolicy("cross-tenant-limit", Scope.TENANT, 1);
+
+        assertThat(engine.check(REQUEST).allowed()).isTrue();
+        assertThat(windowCount(USER_KEY)).isEqualTo(1);
+
+        RateLimitDecision denied = engine.check(REQUEST);
+        assertThat(denied.allowed()).isFalse();
+        assertThat(denied.rejectedBy()).isEqualTo("cross-tenant-limit");
+        assertThat(windowCount(USER_KEY))
+                .as("the sliding-window slot counted the request, then the refund took it back")
+                .isEqualTo(1);
+    }
+
     private long tokens(String key) {
         Object value = redisTemplate.opsForHash().get(key, "tokens");
         return value == null ? -1 : Long.parseLong(value.toString());
     }
 
+    private long windowCount(String key) {
+        Object current = redisTemplate.opsForHash().get(key, "current");
+        Object previous = redisTemplate.opsForHash().get(key, "previous");
+        return Long.parseLong(String.valueOf(current)) + Long.parseLong(String.valueOf(previous));
+    }
+
     private void createPolicy(String id, Scope scope, long capacity) {
+        createPolicy(id, scope,
+                new LimitingStrategy(Algorithm.TOKEN_BUCKET, new TokenBucketConfiguration(capacity, 1, RefillPeriod.HOUR)));
+    }
+
+    private void createPolicy(String id, Scope scope, LimitingStrategy strategy) {
         policyStore.create(new Policy(
                 id,
                 id,
                 new Matching(scope, Map.of("api", "payment")),
-                new LimitingStrategy(Algorithm.TOKEN_BUCKET, new TokenBucketConfiguration(capacity, 1, RefillPeriod.HOUR)),
+                strategy,
                 new PolicyMetadata(true, 10),
                 null,
                 null

@@ -302,6 +302,106 @@ class RateLimiterIntegrationTest {
         assertThat(redisTemplate.hasKey("rl:{TENANT:acme}:payment-tenant-limit")).isTrue();
     }
 
+    @Test
+    void slidingWindowRoundTripsAndLimits() {
+        createSlidingWindowPolicy("search-user-window", "USER", 5, "MINUTE", "search");
+
+        ResponseEntity<Map> fetched = restTemplate.getForEntity("/v1/policies/search-user-window", Map.class);
+        Map<?, ?> strategy = (Map<?, ?>) fetched.getBody().get("strategy");
+        Map<?, ?> configuration = (Map<?, ?>) strategy.get("configuration");
+        assertThat(strategy.get("algorithm")).isEqualTo("SLIDING_WINDOW");
+        assertThat(configuration.get("limit")).isEqualTo(5);
+        assertThat(configuration.get("window")).isEqualTo("MINUTE");
+
+        RateLimitCheckRequest request = new RateLimitCheckRequest("u-window", "acme", "search", null);
+        int allowed = 0;
+        RateLimitDecision last = null;
+        for (int i = 0; i < 6; i++) {
+            last = engine.check(request);
+            if (last.allowed()) {
+                allowed++;
+            }
+        }
+        assertThat(allowed).isEqualTo(5);
+        assertThat(last.rejectedBy()).isEqualTo("search-user-window");
+        assertThat(last.retryAfterMs()).isBetween(1L, 120_000L);
+    }
+
+    @Test
+    void mixedAlgorithmsAreAllOrNothing() {
+        createPolicy("payment-user-limit", "USER", 100, 10, "MINUTE", "payment");
+        createSlidingWindowPolicy("payment-tenant-window", "TENANT", 1, "MINUTE", "payment");
+
+        RateLimitCheckRequest request = new RateLimitCheckRequest("u-mixed", "acme", "payment", null);
+        assertThat(engine.check(request).allowed()).isTrue();
+        assertThat(redisTemplate.opsForHash().get("rl:{USER:u-mixed}:payment-user-limit", "tokens")).isEqualTo("99");
+
+        RateLimitDecision denied = engine.checkReactive(request).block();
+        assertThat(denied.allowed()).isFalse();
+        assertThat(denied.rejectedBy()).isEqualTo("payment-tenant-window");
+        assertThat(redisTemplate.opsForHash().get("rl:{USER:u-mixed}:payment-user-limit", "tokens"))
+                .as("a sliding-window reject must not consume the token bucket")
+                .isEqualTo("99");
+    }
+
+    @Test
+    void concurrentSlidingWindowChecksNeverOverAdmit() throws Exception {
+        createSlidingWindowPolicy("payment-user-window", "USER", 100, "HOUR", "payment");
+        RateLimitCheckRequest request = new RateLimitCheckRequest("u-window-race", "acme", "payment", null);
+
+        AtomicInteger allowed = new AtomicInteger();
+        List<Callable<Void>> tasks = new ArrayList<>();
+        for (int i = 0; i < 1000; i++) {
+            tasks.add(() -> {
+                if (engine.check(request).allowed()) {
+                    allowed.incrementAndGet();
+                }
+                return null;
+            });
+        }
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (Future<Void> future : executor.invokeAll(tasks)) {
+                future.get(30, TimeUnit.SECONDS);
+            }
+        }
+        assertThat(allowed.get()).isEqualTo(100);
+    }
+
+    @Test
+    void slidingWindowRejectsTokenBucketFields() throws Exception {
+        String body = """
+                {
+                  "id": "bad-window",
+                  "name": "bad-window",
+                  "matching": { "scope": "USER", "conditions": {} },
+                  "strategy": {
+                    "algorithm": "SLIDING_WINDOW",
+                    "configuration": { "capacity": 5, "refillRate": 1, "refillPeriod": "MINUTE" }
+                  }
+                }
+                """;
+        HttpResponse<String> response = rawPost("/v1/policies", body, ADMIN_TOKEN);
+        assertThat(response.statusCode()).isEqualTo(400);
+        assertThat(response.body()).contains("limit");
+    }
+
+    private void createSlidingWindowPolicy(String id, String scope, long limit, String window, String api) {
+        String body = """
+                {
+                  "id": "%s",
+                  "name": "%s",
+                  "matching": { "scope": "%s", "conditions": { "api": "%s" } },
+                  "strategy": {
+                    "algorithm": "SLIDING_WINDOW",
+                    "configuration": { "limit": %d, "window": "%s" }
+                  },
+                  "metadata": { "enabled": true, "priority": 10 }
+                }
+                """.formatted(id, id, scope, api, limit, window);
+        ResponseEntity<Map> created = restTemplate.postForEntity("/v1/policies", json(body), Map.class);
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+    }
+
     private HttpResponse<String> rawPost(String path, String body, String token) throws Exception {
         HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(baseUrl() + path))
                 .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)

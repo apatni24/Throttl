@@ -1,6 +1,7 @@
 package com.throttl.ratelimiter.api.dto;
 
 import com.throttl.ratelimiter.domain.Policy;
+import com.throttl.ratelimiter.store.PolicyMapper;
 
 import java.time.Instant;
 
@@ -22,11 +23,7 @@ public record PolicyResponse(
                 new MatchingRequest(policy.matching().scope(), policy.matching().conditions()),
                 new StrategyRequest(
                         policy.strategy().algorithm(),
-                        java.util.Map.of(
-                                "capacity", policy.strategy().configuration().capacity(),
-                                "refillRate", policy.strategy().configuration().refillRate(),
-                                "refillPeriod", policy.strategy().configuration().refillPeriod().name()
-                        )
+                        PolicyMapper.fromConfiguration(policy.strategy().configuration())
                 ),
                 new MetadataResponse(
                         policy.metadata().enabled(),

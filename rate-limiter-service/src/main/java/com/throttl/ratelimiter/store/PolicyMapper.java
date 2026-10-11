@@ -1,11 +1,13 @@
 package com.throttl.ratelimiter.store;
 
 import com.throttl.ratelimiter.domain.Algorithm;
+import com.throttl.ratelimiter.domain.LimitConfiguration;
 import com.throttl.ratelimiter.domain.LimitingStrategy;
 import com.throttl.ratelimiter.domain.Matching;
 import com.throttl.ratelimiter.domain.Policy;
 import com.throttl.ratelimiter.domain.PolicyMetadata;
 import com.throttl.ratelimiter.domain.RefillPeriod;
+import com.throttl.ratelimiter.domain.SlidingWindowConfiguration;
 import com.throttl.ratelimiter.domain.TokenBucketConfiguration;
 
 import java.util.LinkedHashMap;
@@ -17,7 +19,7 @@ public final class PolicyMapper {
     }
 
     public static Policy toDomain(PolicyEntity entity) {
-        TokenBucketConfiguration configuration = toTokenBucketConfiguration(entity.getConfiguration());
+        LimitConfiguration configuration = toConfiguration(entity.getAlgorithm(), entity.getConfiguration());
         return new Policy(
                 entity.getId(),
                 entity.getName(),
@@ -43,37 +45,56 @@ public final class PolicyMapper {
                 ? new LinkedHashMap<>()
                 : new LinkedHashMap<>(policy.matching().conditions()));
         entity.setAlgorithm(policy.strategy().algorithm());
-        entity.setConfiguration(fromTokenBucketConfiguration(policy.strategy().configuration()));
+        entity.setConfiguration(fromConfiguration(policy.strategy().configuration()));
         entity.setEnabled(policy.metadata().enabled());
         entity.setPriority(policy.metadata().priority());
     }
 
-    public static TokenBucketConfiguration toTokenBucketConfiguration(Map<String, Object> configuration) {
+    public static LimitConfiguration toConfiguration(Algorithm algorithm, Map<String, Object> configuration) {
+        if (algorithm == null) {
+            throw new IllegalArgumentException("Invalid algorithm");
+        }
         if (configuration == null) {
             throw new IllegalArgumentException("Missing configuration");
         }
-        long capacity = asLong(configuration.get("capacity"), "capacity");
-        long refillRate = asLong(configuration.get("refillRate"), "refillRate");
-        Object periodValue = configuration.get("refillPeriod");
-        if (periodValue == null) {
-            throw new IllegalArgumentException("Invalid refill period");
-        }
-        RefillPeriod period;
-        try {
-            period = RefillPeriod.valueOf(String.valueOf(periodValue));
-        } catch (IllegalArgumentException ex) {
-            throw new IllegalArgumentException("Invalid refill period");
-        }
-        return new TokenBucketConfiguration(capacity, refillRate, period);
+        return switch (algorithm) {
+            case TOKEN_BUCKET -> new TokenBucketConfiguration(
+                    asLong(configuration.get("capacity"), "capacity"),
+                    asLong(configuration.get("refillRate"), "refillRate"),
+                    asPeriod(configuration.get("refillPeriod"), "refill period")
+            );
+            case SLIDING_WINDOW -> new SlidingWindowConfiguration(
+                    asLong(configuration.get("limit"), "limit"),
+                    asPeriod(configuration.get("window"), "window")
+            );
+        };
     }
 
-    public static Map<String, Object> fromTokenBucketConfiguration(TokenBucketConfiguration configuration) {
+    public static Map<String, Object> fromConfiguration(LimitConfiguration configuration) {
         Map<String, Object> map = new LinkedHashMap<>();
-        map.put("capacity", configuration.capacity());
-        map.put("refillRate", configuration.refillRate());
-        map.put("refillPeriod", configuration.refillPeriod().name());
-        map.put("algorithm", Algorithm.TOKEN_BUCKET.name());
+        switch (configuration) {
+            case TokenBucketConfiguration tokenBucket -> {
+                map.put("capacity", tokenBucket.capacity());
+                map.put("refillRate", tokenBucket.refillRate());
+                map.put("refillPeriod", tokenBucket.refillPeriod().name());
+            }
+            case SlidingWindowConfiguration slidingWindow -> {
+                map.put("limit", slidingWindow.limit());
+                map.put("window", slidingWindow.window().name());
+            }
+        }
         return map;
+    }
+
+    private static RefillPeriod asPeriod(Object value, String field) {
+        if (value == null) {
+            throw new IllegalArgumentException("Invalid " + field);
+        }
+        try {
+            return RefillPeriod.valueOf(String.valueOf(value));
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("Invalid " + field);
+        }
     }
 
     private static long asLong(Object value, String field) {

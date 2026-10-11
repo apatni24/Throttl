@@ -27,7 +27,8 @@ public final class PolicyAssembler {
         if (request.strategy() == null) {
             throw new PolicyValidationException("Strategy is required");
         }
-        if (request.strategy().algorithm() != null && request.strategy().algorithm() != Algorithm.TOKEN_BUCKET) {
+        Algorithm algorithm = request.strategy().algorithm();
+        if (algorithm == null) {
             throw new PolicyValidationException("Invalid algorithm");
         }
         Map<String, Object> configuration = request.strategy().configuration();
@@ -46,10 +47,7 @@ public final class PolicyAssembler {
                     request.id(),
                     request.name(),
                     new Matching(request.matching().scope(), cleanedConditions(request.matching().conditions())),
-                    new LimitingStrategy(
-                            request.strategy().algorithm(),
-                            PolicyMapper.toTokenBucketConfiguration(configuration)
-                    ),
+                    new LimitingStrategy(algorithm, PolicyMapper.toConfiguration(algorithm, configuration)),
                     new PolicyMetadata(enabled, priority),
                     null,
                     null

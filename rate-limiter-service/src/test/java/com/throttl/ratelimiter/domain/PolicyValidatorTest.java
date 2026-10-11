@@ -127,6 +127,52 @@ class PolicyValidatorTest {
     }
 
     @Test
+    void acceptsSlidingWindow() {
+        Policy policy = new Policy(
+                "search-user-window",
+                "n",
+                matching(),
+                new LimitingStrategy(Algorithm.SLIDING_WINDOW, new SlidingWindowConfiguration(50, RefillPeriod.MINUTE)),
+                metadata(),
+                null,
+                null
+        );
+        PolicyValidator.validate(policy);
+    }
+
+    @Test
+    void rejectsNonPositiveSlidingWindowLimit() {
+        Policy policy = new Policy(
+                "search-user-window",
+                "n",
+                matching(),
+                new LimitingStrategy(Algorithm.SLIDING_WINDOW, new SlidingWindowConfiguration(0, RefillPeriod.MINUTE)),
+                metadata(),
+                null,
+                null
+        );
+        assertThatThrownBy(() -> PolicyValidator.validate(policy))
+                .isInstanceOf(PolicyValidationException.class)
+                .hasMessageContaining("Limit");
+    }
+
+    @Test
+    void rejectsConfigurationThatDoesNotMatchAlgorithm() {
+        Policy policy = new Policy(
+                "search-user-window",
+                "n",
+                matching(),
+                new LimitingStrategy(Algorithm.SLIDING_WINDOW, new TokenBucketConfiguration(100, 10, RefillPeriod.SECOND)),
+                metadata(),
+                null,
+                null
+        );
+        assertThatThrownBy(() -> PolicyValidator.validate(policy))
+                .isInstanceOf(PolicyValidationException.class)
+                .hasMessageContaining("does not match");
+    }
+
+    @Test
     void rejectsNegativePriority() {
         Policy policy = new Policy(
                 "payment-user-limit",

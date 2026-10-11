@@ -1,7 +1,9 @@
 package com.throttl.ratelimiter.engine;
 
 import com.throttl.ratelimiter.config.RateLimiterProperties;
+import com.throttl.ratelimiter.domain.LimitConfiguration;
 import com.throttl.ratelimiter.domain.Policy;
+import com.throttl.ratelimiter.domain.SlidingWindowConfiguration;
 import com.throttl.ratelimiter.domain.TokenBucketConfiguration;
 import com.throttl.ratelimiter.metrics.RateLimitMetrics;
 import io.lettuce.core.cluster.SlotHash;
@@ -25,21 +27,27 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.IntStream;
 
+/**
+ * Runs bucket checks in Redis. Every algorithm is evaluated by the same Lua
+ * script, so one request that matches a token-bucket policy and a
+ * sliding-window policy is still all-or-nothing.
+ */
 @Component
-public class TokenBucketAlgorithm implements RateLimitAlgorithm {
+public class RedisRateLimiter {
 
-    private static final Logger log = LoggerFactory.getLogger(TokenBucketAlgorithm.class);
-    private static final String REQUESTED = "1";
+    private static final Logger log = LoggerFactory.getLogger(RedisRateLimiter.class);
+    private static final long REQUESTED = 1L;
+    private static final String TOKEN_BUCKET = "1";
+    private static final String SLIDING_WINDOW = "2";
 
     private final StringRedisTemplate redisTemplate;
     private final ReactiveStringRedisTemplate reactiveRedisTemplate;
     private final DefaultRedisScript<List> script;
-    private final DefaultRedisScript<List> andScript;
     private final DefaultRedisScript<Long> refundScript;
     private final RateLimitMetrics metrics;
     private final RateLimiterProperties properties;
 
-    public TokenBucketAlgorithm(
+    public RedisRateLimiter(
             StringRedisTemplate redisTemplate,
             ReactiveStringRedisTemplate reactiveRedisTemplate,
             RateLimitMetrics metrics,
@@ -50,29 +58,25 @@ public class TokenBucketAlgorithm implements RateLimitAlgorithm {
         this.metrics = metrics;
         this.properties = properties;
         this.script = new DefaultRedisScript<>();
-        this.script.setScriptSource(new ResourceScriptSource(new ClassPathResource("redis/token_bucket.lua")));
+        this.script.setScriptSource(new ResourceScriptSource(new ClassPathResource("redis/rate_limit.lua")));
         this.script.setResultType(List.class);
-        this.andScript = new DefaultRedisScript<>();
-        this.andScript.setScriptSource(new ResourceScriptSource(new ClassPathResource("redis/token_bucket_and.lua")));
-        this.andScript.setResultType(List.class);
         this.refundScript = new DefaultRedisScript<>();
-        this.refundScript.setScriptSource(new ResourceScriptSource(new ClassPathResource("redis/token_bucket_refund.lua")));
+        this.refundScript.setScriptSource(new ResourceScriptSource(new ClassPathResource("redis/rate_limit_refund.lua")));
         this.refundScript.setResultType(Long.class);
     }
 
-    @Override
     public RateLimitDecision evaluate(Policy policy, String bucketKey) {
         return evaluateAll(List.of(policy), List.of(bucketKey)).getFirst();
     }
 
     /**
-     * Evaluates every matching bucket. Tokens are taken from all buckets only if
+     * Evaluates every matching bucket. Units are taken from all buckets only if
      * every bucket would allow; otherwise none stay taken.
      * <p>
      * Standalone Redis: one script over every key, fully atomic.
      * Redis Cluster: one atomic script per hash slot. If any slot group denies,
      * groups that already consumed are refunded. Between consume and refund a
-     * concurrent check can be denied early; tokens are never overspent.
+     * concurrent check can be denied early; capacity is never overspent.
      */
     public List<RateLimitDecision> evaluateAll(List<Policy> policies, List<String> bucketKeys) {
         if (policies.size() != bucketKeys.size()) {
@@ -123,13 +127,13 @@ public class TokenBucketAlgorithm implements RateLimitAlgorithm {
         return List.copyOf(bySlot.values());
     }
 
+    @SuppressWarnings("unchecked")
     private List<RateLimitDecision> evaluateGroup(List<Policy> policies, List<String> bucketKeys, List<Integer> group) {
         List<Policy> groupPolicies = pick(policies, group);
-        List<String> groupKeys = pick(bucketKeys, group);
-        if (groupPolicies.size() == 1) {
-            return List.of(parseOne(groupPolicies.getFirst(), blockingOne(groupPolicies.getFirst(), groupKeys.getFirst())));
-        }
-        return parseAndResult(groupPolicies, blockingAnd(groupPolicies, groupKeys));
+        List<String> args = scriptArgs(groupPolicies);
+        List<Object> result = (List<Object>) redisTemplate.execute(
+                script, pick(bucketKeys, group), (Object[]) args.toArray(new String[0]));
+        return parse(groupPolicies, result);
     }
 
     private Mono<List<RateLimitDecision>> evaluateGroupReactive(
@@ -138,13 +142,10 @@ public class TokenBucketAlgorithm implements RateLimitAlgorithm {
             List<Integer> group
     ) {
         List<Policy> groupPolicies = pick(policies, group);
-        List<String> groupKeys = pick(bucketKeys, group);
-        if (groupPolicies.size() == 1) {
-            Policy policy = groupPolicies.getFirst();
-            return scriptResult(script, groupKeys, oneArgs(policy)).map(result -> List.of(parseOne(policy, result)));
-        }
-        return scriptResult(andScript, groupKeys, andArgs(groupPolicies))
-                .map(result -> parseAndResult(groupPolicies, result));
+        return reactiveRedisTemplate.execute(script, pick(bucketKeys, group), scriptArgs(groupPolicies))
+                .collectList()
+                .map(RedisRateLimiter::flattenScriptEmission)
+                .map(result -> parse(groupPolicies, result));
     }
 
     /**
@@ -214,7 +215,7 @@ public class TokenBucketAlgorithm implements RateLimitAlgorithm {
                 metrics.incrementCrossSlotRefunds();
             } catch (RuntimeException ex) {
                 metrics.incrementRedisErrors();
-                log.warn("Cross-slot refund failed for {}; tokens stay spent until refill", pick(bucketKeys, group), ex);
+                log.warn("Cross-slot refund failed for {}; capacity stays spent until refill", pick(bucketKeys, group), ex);
             }
         }
     }
@@ -227,8 +228,8 @@ public class TokenBucketAlgorithm implements RateLimitAlgorithm {
         RateLimitDecision[] adjusted = decisions.clone();
         for (List<Integer> group : refunded) {
             for (int index : group) {
-                long capacity = policies.get(index).strategy().configuration().capacity();
-                adjusted[index] = RateLimitDecision.allow(Math.min(capacity, decisions[index].remaining() + 1));
+                long limit = policies.get(index).strategy().configuration().burstLimit();
+                adjusted[index] = RateLimitDecision.allow(Math.min(limit, decisions[index].remaining() + REQUESTED));
             }
         }
         return List.of(adjusted);
@@ -252,24 +253,6 @@ public class TokenBucketAlgorithm implements RateLimitAlgorithm {
     }
 
     @SuppressWarnings("unchecked")
-    private List<Object> blockingAnd(List<Policy> policies, List<String> bucketKeys) {
-        List<String> args = andArgs(policies);
-        return (List<Object>) redisTemplate.execute(andScript, bucketKeys, (Object[]) args.toArray(new String[0]));
-    }
-
-    @SuppressWarnings("unchecked")
-    private List<Object> blockingOne(Policy policy, String bucketKey) {
-        List<String> args = oneArgs(policy);
-        return (List<Object>) redisTemplate.execute(script, List.of(bucketKey), (Object[]) args.toArray(new String[0]));
-    }
-
-    private Mono<List<Object>> scriptResult(DefaultRedisScript<List> redisScript, List<String> keys, List<String> args) {
-        return reactiveRedisTemplate.execute(redisScript, keys, args)
-                .collectList()
-                .map(TokenBucketAlgorithm::flattenScriptEmission);
-    }
-
-    @SuppressWarnings("unchecked")
     private static List<Object> flattenScriptEmission(List<?> emitted) {
         if (emitted.size() == 1 && emitted.getFirst() instanceof List<?> inner) {
             return (List<Object>) inner;
@@ -277,40 +260,42 @@ public class TokenBucketAlgorithm implements RateLimitAlgorithm {
         return (List<Object>) emitted;
     }
 
-    private static List<String> oneArgs(Policy policy) {
-        TokenBucketConfiguration configuration = policy.strategy().configuration();
-        return List.of(
-                String.valueOf(configuration.capacity()),
-                String.valueOf(configuration.refillRate()),
-                String.valueOf(configuration.refillPeriodMillis()),
-                REQUESTED
-        );
-    }
-
-    private static List<String> andArgs(List<Policy> policies) {
-        List<String> args = new ArrayList<>();
-        args.add(REQUESTED);
+    private static List<String> scriptArgs(List<Policy> policies) {
+        List<String> args = new ArrayList<>(1 + policies.size() * 4);
+        args.add(String.valueOf(REQUESTED));
         for (Policy policy : policies) {
-            TokenBucketConfiguration configuration = policy.strategy().configuration();
-            args.add(String.valueOf(configuration.capacity()));
-            args.add(String.valueOf(configuration.refillRate()));
-            args.add(String.valueOf(configuration.refillPeriodMillis()));
+            switch (policy.strategy().configuration()) {
+                case TokenBucketConfiguration tokenBucket -> {
+                    args.add(TOKEN_BUCKET);
+                    args.add(String.valueOf(tokenBucket.capacity()));
+                    args.add(String.valueOf(tokenBucket.refillRate()));
+                    args.add(String.valueOf(tokenBucket.refillPeriodMillis()));
+                }
+                case SlidingWindowConfiguration slidingWindow -> {
+                    args.add(SLIDING_WINDOW);
+                    args.add(String.valueOf(slidingWindow.limit()));
+                    args.add(String.valueOf(slidingWindow.windowMillis()));
+                    args.add("0");
+                }
+            }
         }
         return args;
     }
 
     private static List<String> refundArgs(List<Policy> policies) {
-        List<String> args = new ArrayList<>();
-        args.add(REQUESTED);
+        List<String> args = new ArrayList<>(policies.size() * 3);
         for (Policy policy : policies) {
-            args.add(String.valueOf(policy.strategy().configuration().capacity()));
+            LimitConfiguration configuration = policy.strategy().configuration();
+            args.add(configuration instanceof SlidingWindowConfiguration ? SLIDING_WINDOW : TOKEN_BUCKET);
+            args.add(String.valueOf(REQUESTED));
+            args.add(String.valueOf(configuration.burstLimit()));
         }
         return args;
     }
 
-    private List<RateLimitDecision> parseAndResult(List<Policy> policies, List<Object> result) {
+    private static List<RateLimitDecision> parse(List<Policy> policies, List<Object> result) {
         if (result == null || result.size() != 2 + policies.size() * 3) {
-            throw new IllegalStateException("Unexpected Lua AND result");
+            throw new IllegalStateException("Unexpected rate_limit.lua result");
         }
         List<RateLimitDecision> decisions = new ArrayList<>(policies.size());
         for (int i = 0; i < policies.size(); i++) {
@@ -318,27 +303,11 @@ public class TokenBucketAlgorithm implements RateLimitAlgorithm {
             long remaining = asLong(result.get(offset));
             long retryAfterMs = asLong(result.get(offset + 1));
             boolean wouldAllow = asLong(result.get(offset + 2)) == 1L;
-            Policy policy = policies.get(i);
-            if (wouldAllow) {
-                decisions.add(RateLimitDecision.allow(remaining));
-            } else {
-                decisions.add(RateLimitDecision.deny(remaining, retryAfterMs, policy.id()));
-            }
+            decisions.add(wouldAllow
+                    ? RateLimitDecision.allow(remaining)
+                    : RateLimitDecision.deny(remaining, retryAfterMs, policies.get(i).id()));
         }
         return List.copyOf(decisions);
-    }
-
-    private static RateLimitDecision parseOne(Policy policy, List<Object> result) {
-        if (result == null || result.size() < 3) {
-            throw new IllegalStateException("Unexpected Lua result");
-        }
-        boolean allowed = asLong(result.get(0)) == 1L;
-        long remaining = asLong(result.get(1));
-        long retryAfterMs = asLong(result.get(2));
-        if (allowed) {
-            return RateLimitDecision.allow(remaining);
-        }
-        return RateLimitDecision.deny(remaining, retryAfterMs, policy.id());
     }
 
     private static long asLong(Object value) {

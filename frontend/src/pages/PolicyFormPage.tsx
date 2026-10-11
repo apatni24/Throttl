@@ -4,17 +4,30 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { policiesApi } from '../api/policies'
 import { useToast } from '../components/Toast'
 import { Button, ErrorState, Skeleton } from '../components/Ui'
-import type { Algorithm, Policy, RefillPeriod, Scope } from '../types/models'
+import type {
+  Algorithm,
+  Policy,
+  RefillPeriod,
+  Scope,
+  SlidingWindowConfiguration,
+  Strategy,
+  TokenBucketConfiguration,
+} from '../types/models'
 import { validatePolicy } from '../utils/format'
+
+const PERIODS: RefillPeriod[] = ['SECOND', 'MINUTE', 'HOUR']
+
+function defaultStrategy(algorithm: Algorithm): Strategy {
+  return algorithm === 'SLIDING_WINDOW'
+    ? { algorithm, configuration: { limit: 100, window: 'MINUTE' } }
+    : { algorithm, configuration: { capacity: 100, refillRate: 10, refillPeriod: 'SECOND' } }
+}
 
 const emptyPolicy = (): Policy => ({
   id: '',
   name: '',
   matching: { scope: 'USER', conditions: {} },
-  strategy: {
-    algorithm: 'TOKEN_BUCKET',
-    configuration: { capacity: 100, refillRate: 10, refillPeriod: 'SECOND' },
-  },
+  strategy: defaultStrategy('TOKEN_BUCKET'),
   metadata: { enabled: true, priority: 10 },
 })
 
@@ -128,78 +141,29 @@ export function PolicyFormPage() {
           <select
             value={policy.strategy.algorithm}
             onChange={(e) =>
-              setPolicy({
-                ...policy,
-                strategy: { ...policy.strategy, algorithm: e.target.value as Algorithm },
-              })
+              setPolicy({ ...policy, strategy: defaultStrategy(e.target.value as Algorithm) })
             }
             className="w-full rounded-md border border-line bg-ink px-3 py-2 text-sm"
           >
             <option value="TOKEN_BUCKET">TOKEN_BUCKET</option>
+            <option value="SLIDING_WINDOW">SLIDING_WINDOW</option>
           </select>
         </Field>
-        <div className="grid grid-cols-3 gap-3">
-          <Field label="Capacity">
-            <input
-              type="number"
-              value={policy.strategy.configuration.capacity}
-              onChange={(e) =>
-                setPolicy({
-                  ...policy,
-                  strategy: {
-                    ...policy.strategy,
-                    configuration: {
-                      ...policy.strategy.configuration,
-                      capacity: Number(e.target.value),
-                    },
-                  },
-                })
-              }
-              className="w-full rounded-md border border-line bg-ink px-3 py-2 font-mono text-sm"
-            />
-          </Field>
-          <Field label="Refill rate">
-            <input
-              type="number"
-              value={policy.strategy.configuration.refillRate}
-              onChange={(e) =>
-                setPolicy({
-                  ...policy,
-                  strategy: {
-                    ...policy.strategy,
-                    configuration: {
-                      ...policy.strategy.configuration,
-                      refillRate: Number(e.target.value),
-                    },
-                  },
-                })
-              }
-              className="w-full rounded-md border border-line bg-ink px-3 py-2 font-mono text-sm"
-            />
-          </Field>
-          <Field label="Refill period">
-            <select
-              value={policy.strategy.configuration.refillPeriod}
-              onChange={(e) =>
-                setPolicy({
-                  ...policy,
-                  strategy: {
-                    ...policy.strategy,
-                    configuration: {
-                      ...policy.strategy.configuration,
-                      refillPeriod: e.target.value as RefillPeriod,
-                    },
-                  },
-                })
-              }
-              className="w-full rounded-md border border-line bg-ink px-3 py-2 text-sm"
-            >
-              {['SECOND', 'MINUTE', 'HOUR'].map((period) => (
-                <option key={period}>{period}</option>
-              ))}
-            </select>
-          </Field>
-        </div>
+        {policy.strategy.algorithm === 'TOKEN_BUCKET' ? (
+          <TokenBucketFields
+            configuration={policy.strategy.configuration}
+            onChange={(configuration) =>
+              setPolicy({ ...policy, strategy: { algorithm: 'TOKEN_BUCKET', configuration } })
+            }
+          />
+        ) : (
+          <SlidingWindowFields
+            configuration={policy.strategy.configuration}
+            onChange={(configuration) =>
+              setPolicy({ ...policy, strategy: { algorithm: 'SLIDING_WINDOW', configuration } })
+            }
+          />
+        )}
       </section>
       <section className="space-y-3">
         <h2 className="text-sm uppercase tracking-wider text-mute">Metadata</h2>
@@ -261,6 +225,108 @@ function sanitizePolicy(policy: Policy): Policy {
     ...policy,
     matching: { ...policy.matching, conditions },
   }
+}
+
+function TokenBucketFields({
+  configuration,
+  onChange,
+}: {
+  configuration: TokenBucketConfiguration
+  onChange: (next: TokenBucketConfiguration) => void
+}) {
+  return (
+    <div className="grid grid-cols-3 gap-3">
+      <NumberField
+        label="Capacity"
+        value={configuration.capacity}
+        onChange={(capacity) => onChange({ ...configuration, capacity })}
+      />
+      <NumberField
+        label="Refill rate"
+        value={configuration.refillRate}
+        onChange={(refillRate) => onChange({ ...configuration, refillRate })}
+      />
+      <PeriodField
+        label="Refill period"
+        value={configuration.refillPeriod}
+        onChange={(refillPeriod) => onChange({ ...configuration, refillPeriod })}
+      />
+    </div>
+  )
+}
+
+function SlidingWindowFields({
+  configuration,
+  onChange,
+}: {
+  configuration: SlidingWindowConfiguration
+  onChange: (next: SlidingWindowConfiguration) => void
+}) {
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-2 gap-3">
+        <NumberField
+          label="Limit"
+          value={configuration.limit}
+          onChange={(limit) => onChange({ ...configuration, limit })}
+        />
+        <PeriodField
+          label="Window"
+          value={configuration.window}
+          onChange={(window) => onChange({ ...configuration, window })}
+        />
+      </div>
+      <p className="text-xs text-mute">
+        At most {configuration.limit} requests in any trailing {configuration.window.toLowerCase()}, with
+        no burst at window boundaries.
+      </p>
+    </div>
+  )
+}
+
+function NumberField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: number
+  onChange: (next: number) => void
+}) {
+  return (
+    <Field label={label}>
+      <input
+        type="number"
+        value={value}
+        onChange={(e) => onChange(Number(e.target.value))}
+        className="w-full rounded-md border border-line bg-ink px-3 py-2 font-mono text-sm"
+      />
+    </Field>
+  )
+}
+
+function PeriodField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string
+  value: RefillPeriod
+  onChange: (next: RefillPeriod) => void
+}) {
+  return (
+    <Field label={label}>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as RefillPeriod)}
+        className="w-full rounded-md border border-line bg-ink px-3 py-2 text-sm"
+      >
+        {PERIODS.map((period) => (
+          <option key={period}>{period}</option>
+        ))}
+      </select>
+    </Field>
+  )
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }) {

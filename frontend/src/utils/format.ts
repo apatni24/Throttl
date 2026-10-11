@@ -8,20 +8,29 @@ export function validatePolicy(policy: Policy): string[] {
   }
   if (!policy.name?.trim()) errors.push('Name is required')
   if (!policy.matching?.scope) errors.push('Scope is required')
-  if (!policy.strategy?.algorithm) errors.push('Algorithm is required')
-  const cfg = policy.strategy?.configuration
-  if (!cfg) errors.push('Configuration is required')
-  else {
+  const strategy = policy.strategy
+  if (!strategy?.algorithm) errors.push('Algorithm is required')
+  else if (!strategy.configuration) errors.push('Configuration is required')
+  else if (strategy.algorithm === 'TOKEN_BUCKET') {
+    const cfg = strategy.configuration
     if (!(cfg.capacity > 0)) errors.push('Capacity must be greater than 0')
     if (!(cfg.refillRate > 0)) errors.push('Refill rate must be greater than 0')
     if (!cfg.refillPeriod) errors.push('Refill period is required')
+  } else {
+    const cfg = strategy.configuration
+    if (!(cfg.limit > 0)) errors.push('Limit must be greater than 0')
+    if (!cfg.window) errors.push('Window is required')
   }
   if (policy.metadata.priority < 0) errors.push('Priority must be 0 or greater')
   return errors
 }
 
 export function configSummary(policy: Policy): string {
-  const cfg = policy.strategy.configuration
+  const strategy = policy.strategy
+  if (strategy.algorithm === 'SLIDING_WINDOW') {
+    return `${strategy.configuration.limit} per sliding ${strategy.configuration.window.toLowerCase()}`
+  }
+  const cfg = strategy.configuration
   return `${cfg.capacity} cap · ${cfg.refillRate}/${cfg.refillPeriod.toLowerCase()}`
 }
 
