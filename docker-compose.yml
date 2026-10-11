@@ -19,6 +19,13 @@ x-limiter-env: &limiter-env
   THROTTL_LIMITER_3_URL: http://limiter-3:8080
   THROTTL_CORS_ORIGINS: http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,http://localhost:8088
 
+x-limiter-healthcheck: &limiter-healthcheck
+  test: ["CMD", "wget", "-qO-", "http://localhost:8080/actuator/health"]
+  interval: 5s
+  timeout: 3s
+  retries: 30
+  start_period: 10s
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -53,6 +60,7 @@ services:
     environment:
       <<: *limiter-env
       THROTTL_INSTANCE_ID: limiter-1
+    healthcheck: *limiter-healthcheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -70,6 +78,7 @@ services:
     environment:
       <<: *limiter-env
       THROTTL_INSTANCE_ID: limiter-2
+    healthcheck: *limiter-healthcheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -87,6 +96,7 @@ services:
     environment:
       <<: *limiter-env
       THROTTL_INSTANCE_ID: limiter-3
+    healthcheck: *limiter-healthcheck
     depends_on:
       postgres:
         condition: service_healthy
@@ -104,9 +114,12 @@ services:
     ports:
       - "8080:8080"
     depends_on:
-      - limiter-1
-      - limiter-2
-      - limiter-3
+      limiter-1:
+        condition: service_healthy
+      limiter-2:
+        condition: service_healthy
+      limiter-3:
+        condition: service_healthy
 
   demo:
     build:
