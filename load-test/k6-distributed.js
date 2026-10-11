@@ -1,5 +1,8 @@
 import http from 'k6/http';
 import { check } from 'k6';
+
+const ADMIN_TOKEN = __ENV.THROTTL_ADMIN_TOKEN || 'throttl-dev-admin-token';
+const ADMIN_HEADERS = { 'Content-Type': 'application/json', Authorization: `Bearer ${ADMIN_TOKEN}` };
 import { Counter } from 'k6/metrics';
 
 const INSTANCES = (__ENV.INSTANCES || 'http://localhost:8081,http://localhost:8082,http://localhost:8083').split(',');
@@ -30,10 +33,8 @@ export function setup() {
     },
     metadata: { enabled: true, priority: 1 },
   };
-  http.del(`${base}/v1/policies/distributed-user-limit`);
-  http.post(`${base}/v1/policies`, JSON.stringify(policy), {
-    headers: { 'Content-Type': 'application/json' },
-  });
+  http.del(`${base}/v1/policies/distributed-user-limit`, null, { headers: ADMIN_HEADERS });
+  http.post(`${base}/v1/policies`, JSON.stringify(policy), { headers: ADMIN_HEADERS });
   return { userId };
 }
 

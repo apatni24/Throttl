@@ -7,6 +7,8 @@ I2="${INSTANCE_2:-http://localhost:8082}"
 I3="${INSTANCE_3:-http://localhost:8083}"
 PROM="${PROM_URL:-http://localhost:9090}"
 GRAFANA="${GRAFANA_URL:-http://localhost:3000}"
+TOKEN="${THROTTL_ADMIN_TOKEN:-throttl-dev-admin-token}"
+AUTH=(-H "Authorization: Bearer $TOKEN")
 
 pass=0
 fail=0
@@ -15,6 +17,7 @@ ok() { printf '    PASS %s\n' "$*"; pass=$((pass + 1)); }
 bad() { printf '    FAIL %s\n' "$*"; fail=$((fail + 1)); }
 
 json() { curl -sf -H 'Content-Type: application/json' "$@"; }
+admin_json() { json "${AUTH[@]}" "$@"; }
 check() { json -X POST "$BASE/v1/check" -d "$1"; }
 
 clear_policies() {
@@ -23,7 +26,7 @@ clear_policies() {
   if [[ -n "$ids" ]]; then
     while IFS= read -r id; do
       [[ -z "$id" ]] && continue
-      curl -s -X DELETE "$BASE/v1/policies/$id" >/dev/null || true
+      curl -s "${AUTH[@]}" -X DELETE "$BASE/v1/policies/$id" >/dev/null || true
     done <<< "$ids"
   fi
 }
@@ -32,10 +35,10 @@ put_policy() {
   local id="$1"
   local body="$2"
   local code
-  code=$(curl -s -o /tmp/throttl-policy.json -w '%{http_code}' -X POST "$BASE/v1/policies" \
+  code=$(curl -s -o /tmp/throttl-policy.json -w '%{http_code}' "${AUTH[@]}" -X POST "$BASE/v1/policies" \
     -H 'Content-Type: application/json' -d "$body")
   if [[ "$code" == "400" ]]; then
-    curl -sf -X PUT "$BASE/v1/policies/$id" -H 'Content-Type: application/json' -d "$body" >/dev/null
+    admin_json -X PUT "$BASE/v1/policies/$id" -d "$body" >/dev/null
   elif [[ "$code" != "201" ]]; then
     cat /tmp/throttl-policy.json
     return 1
@@ -90,16 +93,24 @@ for svc in postgres redis limiter-1 limiter-2 limiter-3 prometheus grafana; do
   fi
 done
 
+note "Control-plane auth"
+anon=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$BASE/v1/policies" -H 'Content-Type: application/json' -d "$POLICY5")
+[[ "$anon" == "401" ]] && ok "POST /v1/policies without token -> 401" || bad "anonymous write returned $anon"
+wrong=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$BASE/v1/policies/test-user-policy" -H 'Authorization: Bearer wrong')
+[[ "$wrong" == "401" ]] && ok "DELETE with wrong token -> 401" || bad "wrong-token write returned $wrong"
+reads=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/v1/policies")
+[[ "$reads" == "200" ]] && ok "GET /v1/policies stays open" || bad "anonymous read returned $reads"
+
 note "Policy CRUD"
 clear_policies
-created=$(json -X POST "$BASE/v1/policies" -d "$POLICY5")
+created=$(admin_json -X POST "$BASE/v1/policies" -d "$POLICY5")
 echo "$created" | grep -q '"id":"test-user-policy"' && ok "POST /v1/policies" || bad "POST /v1/policies $created"
 fetched=$(curl -sf "$BASE/v1/policies/test-user-policy")
 echo "$fetched" | grep -q '"capacity":5' && ok "GET policy capacity 5" || bad "GET $fetched"
-json -X PUT "$BASE/v1/policies/test-user-policy" -d "$POLICY10" >/dev/null
+admin_json -X PUT "$BASE/v1/policies/test-user-policy" -d "$POLICY10" >/dev/null
 updated=$(curl -sf "$BASE/v1/policies/test-user-policy")
 echo "$updated" | grep -q '"capacity":10' && ok "PUT capacity 10 persisted" || bad "PUT $updated"
-json -X PUT "$BASE/v1/policies/test-user-policy" -d "$POLICY5" >/dev/null
+admin_json -X PUT "$BASE/v1/policies/test-user-policy" -d "$POLICY5" >/dev/null
 
 note "Token consumption capacity=5"
 r1=$(check '{"userId":"user-1","api":"test"}')
@@ -210,7 +221,7 @@ clear_policies
 put_policy test-user-policy "$POLICY5"
 for _ in 1 2 3 4 5; do check '{"userId":"reset-user","api":"test"}' >/dev/null; done
 before=$(docker compose exec -T redis redis-cli EXISTS 'rl:{USER:reset-user}:test-user-policy')
-json -X PUT "$BASE/v1/policies/test-user-policy" -d "$POLICY5" >/dev/null
+admin_json -X PUT "$BASE/v1/policies/test-user-policy" -d "$POLICY5" >/dev/null
 after=$(docker compose exec -T redis redis-cli EXISTS 'rl:{USER:reset-user}:test-user-policy')
 [[ "$before" == "1" && "$after" == "0" ]] && ok "PUT deletes existing buckets" || bad "bucket reset before=$before after=$after"
 fresh=$(check '{"userId":"reset-user","api":"test"}')

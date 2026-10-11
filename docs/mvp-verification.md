@@ -36,7 +36,14 @@ Health: `GET http://localhost:8080/actuator/health` → `status: UP` with Postgr
 - [x] API isolation (payment exhausted, accounts untouched)
 - [x] Multiple policies (user 5 + api 10; deny `rejectedBy=multi-user`)
 
-`./scripts/verify-mvp.sh`: **38 passed, 0 failed**.
+`./scripts/verify-mvp.sh`: **38 passed, 0 failed** (2026-08-20). After the Redis clock, hash-tagged keys, and control-plane auth: **41 passed, 0 failed** (2026-10-11; the three new checks are the auth gate).
+
+## Control plane
+
+- [x] `POST /v1/policies` without a token → 401
+- [x] `DELETE` with a wrong token → 401
+- [x] `GET /v1/policies` and `POST /v1/check` stay open
+- [x] Demo app seeds its policies with `THROTTL_ADMIN_TOKEN`
 
 ## Concurrency
 

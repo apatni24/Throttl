@@ -10,6 +10,7 @@ x-limiter-env: &limiter-env
   THROTTL_REDIS_POOL_ENABLED: ${THROTTL_REDIS_POOL_ENABLED:-true}
   THROTTL_REDIS_POOL_MAX_ACTIVE: ${THROTTL_REDIS_POOL_MAX_ACTIVE:-32}
   THROTTL_REDIS_CLUSTER: ${THROTTL_REDIS_CLUSTER:-false}
+  THROTTL_ADMIN_TOKEN: ${THROTTL_ADMIN_TOKEN:-throttl-dev-admin-token}
   THROTTL_ENVIRONMENT: LOCAL
   THROTTL_PROMETHEUS_URL: http://prometheus:9090
   THROTTL_GRAFANA_URL: http://grafana:3000
@@ -113,6 +114,7 @@ services:
       dockerfile: docker/Dockerfile.demo
     environment:
       RATE_LIMITER_BASE_URL: http://rate-limiter:8080
+      THROTTL_ADMIN_TOKEN: ${THROTTL_ADMIN_TOKEN:-throttl-dev-admin-token}
       SERVER_PORT: 8090
     ports:
       - "8090:8090"

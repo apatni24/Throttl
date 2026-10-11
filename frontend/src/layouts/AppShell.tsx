@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
+import { adminToken } from '../api/http'
 import { systemApi } from '../api/system'
 import { StatusDot } from '../components/Ui'
 
@@ -31,6 +33,7 @@ export function AppShell() {
     refetchInterval: 8000,
   })
   const info = useQuery({ queryKey: ['system-info'], queryFn: systemApi.info })
+  const [token, setToken] = useState(adminToken.get)
   const title =
     titles[location.pathname] ??
     (location.pathname.startsWith('/policies/') ? 'Policy' : 'Throttl')
@@ -80,6 +83,19 @@ export function AppShell() {
         <div className="mt-10 px-3 text-xs text-mute">
           <StatusDot status={health.data?.status ?? 'UNKNOWN'} />
         </div>
+        <label className="mt-6 block px-3 text-xs text-mute">
+          Admin token
+          <input
+            type="password"
+            value={token}
+            placeholder="Required for policy changes"
+            onChange={(e) => {
+              setToken(e.target.value)
+              adminToken.set(e.target.value)
+            }}
+            className="mt-1 w-full rounded-md border border-line bg-ink px-2 py-1.5 text-xs text-text"
+          />
+        </label>
       </aside>
       <div className="flex min-w-0 flex-col">
         <header className="flex items-center justify-between border-b border-line px-8 py-4">

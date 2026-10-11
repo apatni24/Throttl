@@ -1,6 +1,9 @@
 import http from 'k6/http';
 import { check } from 'k6';
 
+const ADMIN_TOKEN = __ENV.THROTTL_ADMIN_TOKEN || 'throttl-dev-admin-token';
+const ADMIN_HEADERS = { 'Content-Type': 'application/json', Authorization: `Bearer ${ADMIN_TOKEN}` };
+
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
 const RATE = Number(__ENV.RATE || 100);
 const DURATION = __ENV.DURATION || '30s';
@@ -36,9 +39,7 @@ export function setup() {
     },
     metadata: { enabled: true, priority: 1 },
   };
-  http.post(`${BASE_URL}/v1/policies`, JSON.stringify(policy), {
-    headers: { 'Content-Type': 'application/json' },
-  });
+  http.post(`${BASE_URL}/v1/policies`, JSON.stringify(policy), { headers: ADMIN_HEADERS });
 }
 
 export default function () {

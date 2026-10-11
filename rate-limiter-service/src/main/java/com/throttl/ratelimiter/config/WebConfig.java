@@ -1,16 +1,27 @@
 package com.throttl.ratelimiter.config;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 @Configuration
-public class CorsConfig implements WebMvcConfigurer {
+public class WebConfig implements WebMvcConfigurer {
 
     private final RateLimiterProperties properties;
+    private final ObjectMapper objectMapper;
 
-    public CorsConfig(RateLimiterProperties properties) {
+    public WebConfig(RateLimiterProperties properties, ObjectMapper objectMapper) {
         this.properties = properties;
+        this.objectMapper = objectMapper;
+    }
+
+    @Override
+    public void addInterceptors(InterceptorRegistry registry) {
+        registry.addInterceptor(new ControlPlaneAuthInterceptor(properties, objectMapper))
+                .addPathPatterns("/v1/**")
+                .excludePathPatterns("/v1/check");
     }
 
     @Override

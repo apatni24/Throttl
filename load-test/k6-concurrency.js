@@ -1,5 +1,8 @@
 import http from 'k6/http';
 import { check } from 'k6';
+
+const ADMIN_TOKEN = __ENV.THROTTL_ADMIN_TOKEN || 'throttl-dev-admin-token';
+const ADMIN_HEADERS = { 'Content-Type': 'application/json', Authorization: `Bearer ${ADMIN_TOKEN}` };
 import { Counter } from 'k6/metrics';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8080';
@@ -29,10 +32,8 @@ export function setup() {
     },
     metadata: { enabled: true, priority: 1 },
   };
-  http.del(`${BASE_URL}/v1/policies/concurrency-user-limit`);
-  http.post(`${BASE_URL}/v1/policies`, JSON.stringify(policy), {
-    headers: { 'Content-Type': 'application/json' },
-  });
+  http.del(`${BASE_URL}/v1/policies/concurrency-user-limit`, null, { headers: ADMIN_HEADERS });
+  http.post(`${BASE_URL}/v1/policies`, JSON.stringify(policy), { headers: ADMIN_HEADERS });
   return { userId };
 }
 

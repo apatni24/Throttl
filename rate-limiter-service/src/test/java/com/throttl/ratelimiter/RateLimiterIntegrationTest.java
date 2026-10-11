@@ -10,6 +10,10 @@ import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.http.client.ClientHttpRequestExecution;
+import org.springframework.http.client.ClientHttpRequestInterceptor;
+import org.springframework.http.client.ClientHttpResponse;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -25,6 +29,11 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.utility.DockerImageName;
 import org.testcontainers.DockerClientFactory;
 
+import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -69,7 +78,13 @@ class RateLimiterIntegrationTest {
         registry.add("spring.data.redis.port", () -> REDIS.getMappedPort(6379));
         registry.add("throttl.cache-ttl-seconds", () -> 60);
         registry.add("throttl.fail-closed", () -> true);
+        registry.add("throttl.admin-token", () -> ADMIN_TOKEN);
     }
+
+    private static final String ADMIN_TOKEN = "test-admin-token";
+
+    @LocalServerPort
+    private int port;
 
     @Autowired
     private TestRestTemplate restTemplate;
@@ -85,6 +100,10 @@ class RateLimiterIntegrationTest {
 
     @BeforeEach
     void resetState() {
+        List<ClientHttpRequestInterceptor> interceptors = restTemplate.getRestTemplate().getInterceptors();
+        if (interceptors.stream().noneMatch(AdminAuth.class::isInstance)) {
+            interceptors.add(new AdminAuth());
+        }
         ResponseEntity<Map[]> existing = restTemplate.getForEntity("/v1/policies", Map[].class);
         if (existing.getBody() != null) {
             for (Map policy : existing.getBody()) {
@@ -245,6 +264,30 @@ class RateLimiterIntegrationTest {
     }
 
     @Test
+    void controlPlaneWritesRequireAdminToken() throws Exception {
+        String body = policyJson("payment-user-limit", "USER", 100, 10, "SECOND", "payment");
+        assertThat(rawPost("/v1/policies", body, null).statusCode()).isEqualTo(401);
+        assertThat(rawPost("/v1/policies", body, "wrong-token").statusCode()).isEqualTo(401);
+        assertThat(rawPost("/v1/playground/burst", "{\"count\":1}", null).statusCode()).isEqualTo(401);
+        assertThat(restTemplate.getForEntity("/v1/policies/payment-user-limit", Map.class).getStatusCode())
+                .as("rejected writes must not reach the store")
+                .isEqualTo(HttpStatus.NOT_FOUND);
+
+        assertThat(rawPost("/v1/policies", body, ADMIN_TOKEN).statusCode()).isEqualTo(201);
+    }
+
+    @Test
+    void readsAndChecksStayOpenWithoutToken() throws Exception {
+        HttpClient client = HttpClient.newHttpClient();
+        HttpResponse<String> list = client.send(
+                HttpRequest.newBuilder(URI.create(baseUrl() + "/v1/policies")).GET().build(),
+                HttpResponse.BodyHandlers.ofString()
+        );
+        assertThat(list.statusCode()).isEqualTo(200);
+        assertThat(rawPost("/v1/check", "{\"userId\":\"u1\",\"api\":\"payment\"}", null).statusCode()).isEqualTo(200);
+    }
+
+    @Test
     void policyUpdateDeletesThatPolicysBucketsOnly() {
         createPolicy("payment-user-limit", "USER", 5, 1, "HOUR", "payment");
         createPolicy("payment-tenant-limit", "TENANT", 5, 1, "HOUR", "payment");
@@ -257,6 +300,35 @@ class RateLimiterIntegrationTest {
 
         assertThat(redisTemplate.hasKey("rl:{USER:u-reset}:payment-user-limit")).isFalse();
         assertThat(redisTemplate.hasKey("rl:{TENANT:acme}:payment-tenant-limit")).isTrue();
+    }
+
+    private HttpResponse<String> rawPost(String path, String body, String token) throws Exception {
+        HttpRequest.Builder request = HttpRequest.newBuilder(URI.create(baseUrl() + path))
+                .header(HttpHeaders.CONTENT_TYPE, MediaType.APPLICATION_JSON_VALUE)
+                .POST(HttpRequest.BodyPublishers.ofString(body));
+        if (token != null) {
+            request.header(HttpHeaders.AUTHORIZATION, "Bearer " + token);
+        }
+        return HttpClient.newHttpClient().send(request.build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    private String baseUrl() {
+        return "http://localhost:" + port;
+    }
+
+    private static final class AdminAuth implements ClientHttpRequestInterceptor {
+        @Override
+        public ClientHttpResponse intercept(
+                org.springframework.http.HttpRequest request,
+                byte[] body,
+                ClientHttpRequestExecution execution
+        )
+                throws IOException {
+            if (!request.getHeaders().containsKey(HttpHeaders.AUTHORIZATION)) {
+                request.getHeaders().setBearerAuth(ADMIN_TOKEN);
+            }
+            return execution.execute(request, body);
+        }
     }
 
     private void createPolicy(String id, String scope, long capacity, long refillRate, String period, String api) {

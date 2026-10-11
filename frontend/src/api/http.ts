@@ -1,4 +1,14 @@
 const API_BASE = (import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8080').replace(/\/$/, '')
+const ADMIN_TOKEN_KEY = 'throttl.adminToken'
+
+export const adminToken = {
+  get: () => localStorage.getItem(ADMIN_TOKEN_KEY) ?? '',
+  set: (value: string) => {
+    const trimmed = value.trim()
+    if (trimmed) localStorage.setItem(ADMIN_TOKEN_KEY, trimmed)
+    else localStorage.removeItem(ADMIN_TOKEN_KEY)
+  },
+}
 
 export class ApiError extends Error {
   readonly status: number
@@ -10,10 +20,12 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = adminToken.get()
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init?.headers ?? {}),
     },
   })

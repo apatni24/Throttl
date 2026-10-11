@@ -7,6 +7,7 @@ server:
 
 rate-limiter:
   base-url: ${RATE_LIMITER_BASE_URL:http://localhost:8080}
+  admin-token: ${THROTTL_ADMIN_TOKEN:}
 
 management:
   endpoints:

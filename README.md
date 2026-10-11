@@ -98,6 +98,10 @@ Enabled policies are cached in Caffeine for 60 seconds (configurable). Writes in
 
 ## API
 
+### Authentication
+
+Every state-changing control-plane call (`POST`/`PUT`/`PATCH`/`DELETE` under `/v1/`, including the playground burst) requires `Authorization: Bearer $THROTTL_ADMIN_TOKEN`. Reads and the data-plane `POST /v1/check` stay open. If `THROTTL_ADMIN_TOKEN` is unset, writes return 503 rather than falling open. Compose uses `throttl-dev-admin-token` unless you export your own.
+
 ### Policies
 
 ```http
@@ -163,13 +167,14 @@ The operator console talks only to the limiter API at `http://127.0.0.1:8080`. D
 cd frontend && npm install && npm run dev
 ```
 
-CORS allows `localhost:5173`. Keep `docker compose` (or the service on `:8080`) running while using the UI.
+CORS allows `localhost:5173`. Keep `docker compose` (or the service on `:8080`) running while using the UI. Paste the admin token into the sidebar field to create, edit, or delete policies; it is kept in the browser's local storage.
 
 Create a policy and check it:
 
 ```bash
 curl -s -X POST http://localhost:8080/v1/policies \
   -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer throttl-dev-admin-token' \
   -d '{
     "id": "payment-user-limit",
     "name": "Payment User Limit",
@@ -200,7 +205,7 @@ Direct instances for the distributed proof: `http://localhost:8081`, `:8082`, `:
 ./gradlew test
 ```
 
-Unit tests cover policy validation, matching, refill, consumption, burst, multi-policy AND semantics, and hash-slot co-location of one subject's keys. Integration tests use Testcontainers (PostgreSQL + Redis) for CRUD, token-bucket behavior, all four scopes, per-policy bucket reset, and 1000 concurrent checks against capacity 100. `CrossSlotIntegrationTest` runs the cluster code path: a denial on one slot refunds the other, and 1000 concurrent USER+TENANT checks never overspend and leave every bucket at exactly `capacity - allowed`.
+Unit tests cover policy validation, matching, refill, consumption, burst, multi-policy AND semantics, and hash-slot co-location of one subject's keys. Integration tests use Testcontainers (PostgreSQL + Redis) for CRUD, admin-token enforcement, token-bucket behavior, all four scopes, per-policy bucket reset, and 1000 concurrent checks against capacity 100. `CrossSlotIntegrationTest` runs the cluster code path: a denial on one slot refunds the other, and 1000 concurrent USER+TENANT checks never overspend and leave every bucket at exactly `capacity - allowed`.
 
 MVP acceptance (CRUD, refill, isolation, shared Redis, Prometheus):
 
@@ -229,7 +234,7 @@ See [docs/failure-testing.md](docs/failure-testing.md). Redis outages fail close
 
 ## Design decisions
 
-See [docs/design-decisions.md](docs/design-decisions.md) for why Redis, Lua, PostgreSQL, token bucket, a single Redis node, fail-closed, the Redis clock, the hash-tagged key layout, and the split between policy data and algorithm code.
+See [docs/design-decisions.md](docs/design-decisions.md) for why Redis, Lua, PostgreSQL, token bucket, a single Redis node, fail-closed, the Redis clock, the hash-tagged key layout, control-plane auth, and the split between policy data and algorithm code.
 
 ## Spring Boot client
 

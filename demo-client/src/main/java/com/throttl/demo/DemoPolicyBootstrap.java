@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -16,8 +17,15 @@ public class DemoPolicyBootstrap implements ApplicationRunner {
 
     private final RestClient restClient;
 
-    public DemoPolicyBootstrap(@Value("${rate-limiter.base-url:http://localhost:8080}") String baseUrl) {
-        this.restClient = RestClient.builder().baseUrl(baseUrl).build();
+    public DemoPolicyBootstrap(
+            @Value("${rate-limiter.base-url:http://localhost:8080}") String baseUrl,
+            @Value("${rate-limiter.admin-token:}") String adminToken
+    ) {
+        RestClient.Builder builder = RestClient.builder().baseUrl(baseUrl);
+        if (!adminToken.isBlank()) {
+            builder.defaultHeader(HttpHeaders.AUTHORIZATION, "Bearer " + adminToken.trim());
+        }
+        this.restClient = builder.build();
     }
 
     @Override

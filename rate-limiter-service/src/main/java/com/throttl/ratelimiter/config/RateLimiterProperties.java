@@ -25,6 +25,8 @@ public class RateLimiterProperties {
     private boolean redisShareNativeConnection = false;
     /** true = bucket keys may live on different hash slots; evaluate per slot and refund on deny. */
     private boolean redisCluster = false;
+    /** Bearer token for control-plane writes. Blank = writes are rejected. */
+    private String adminToken = "";
 
     public long cacheTtlSeconds() {
         return cacheTtlSeconds;
@@ -116,6 +118,14 @@ public class RateLimiterProperties {
 
     public void setRedisCluster(boolean redisCluster) {
         this.redisCluster = redisCluster;
+    }
+
+    public String adminToken() {
+        return adminToken;
+    }
+
+    public void setAdminToken(String adminToken) {
+        this.adminToken = adminToken == null ? "" : adminToken.trim();
     }
 
     public static class PeerInstance {

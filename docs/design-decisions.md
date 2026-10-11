@@ -43,6 +43,15 @@ Standalone Redis keeps the single-script path for every request; the tag is harm
 
 The MVP fails closed: if the Lua script cannot run, `/v1/check` returns `allowed: false` with `rejectedBy: redis-unavailable`. `spring.data.redis.timeout` is 500ms so the client does not wait indefinitely. Downstream services should treat that as a deny.
 
+## Why authenticate the control plane separately?
+
+`/v1/check` is a data-plane call: every protected service makes it on every request, and it can only consume tokens. Policy writes change who is limited and how hard. An unauthenticated `PUT` could set capacity to a billion, or a `DELETE` could remove the limit in front of payments. Those are different trust boundaries, so writes require `Authorization: Bearer $THROTTL_ADMIN_TOKEN` and the check path stays open.
+
+- The check is a Spring MVC interceptor, not a servlet filter, so CORS headers are already set when it rejects. The console sees a readable 401 instead of an opaque CORS failure.
+- Token comparison hashes both sides and uses `MessageDigest.isEqual`, so response time does not reveal how many leading characters matched.
+- No token configured means writes return 503. A missing secret should not fall open.
+- Reads stay open for dashboards. A single shared token is the minimum boundary, not per-operator identity; the next step would be OIDC with an audit log of policy changes.
+
 ## Why a Redis generation for the policy cache?
 
 Caffeine is per process. Invalidating only the instance that handled `PUT /v1/policies` left the other two serving a stale list for up to 60s. `policy:generation` in Redis is incremented on create/update/delete; each instance compares that counter before using Caffeine. TTL remains a backstop.
