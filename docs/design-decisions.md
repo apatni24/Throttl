@@ -50,7 +50,23 @@ Standalone Redis keeps the single-script path for every request; the tag is harm
 
 ## What happens when Redis fails?
 
-The MVP fails closed: if the Lua script cannot run, `/v1/check` returns `allowed: false` with `rejectedBy: redis-unavailable`. `spring.data.redis.timeout` is 500ms so the client does not wait indefinitely. Downstream services should treat that as a deny.
+Each policy decides, because the right answer depends on what the limit protects. `metadata.failureMode`:
+
+| Mode | Decision while Redis is down | Use for |
+|---|---|---|
+| `FAIL_CLOSED` | deny, `rejectedBy: redis-unavailable` | payments, login attempts, anything where over-admission costs money or security |
+| `FAIL_OPEN` | allow | limits whose only job is fairness; an outage of the limiter must not become an outage of the product |
+| `LOCAL_FALLBACK` | enforce `max(1, limit / instances)` in process | expensive endpoints you want bounded but available (search, exports) |
+| *(unset)* | service default, `THROTTL_FAIL_CLOSED` (true) | |
+
+A request that matches several policies is denied if any matching policy is `FAIL_CLOSED`; otherwise the `LOCAL_FALLBACK` policies are checked together, all-or-nothing as in Redis, and `FAIL_OPEN` policies allow. The response carries `degraded: true` and per-policy statuses (`FAILED_CLOSED`, `FAILED_OPEN`, `LOCAL_ALLOWED`, `LOCAL_REJECTED`), and `rate_limit_degraded_total{policy,mode,outcome}` counts them, so a client and an operator can both tell a real limit from an outage decision.
+
+`LOCAL_FALLBACK` is deliberately approximate. Each instance gets an equal share of the limit with no coordination, so the fleet total stays near the global limit if traffic is spread evenly by the load balancer, and drifts if it is not (one instance taking all the traffic admits only a third). Rounding down errs toward denial; the floor of 1 means a limit of 1 across 3 instances can admit 3. Local consumption is not written back to Redis, so after recovery a key can admit up to its full Redis-side remaining again. For the outage window that is the trade: bounded and available instead of exact.
+
+Two supporting changes make the modes actually reachable:
+
+- **The policy catalog does not need Redis.** Every check reads the `policy:generation` counter from Redis before trusting the Caffeine cache. That read used to throw first during an outage, so the global fallback always won and no per-policy mode ran. Now a failed generation read serves the cached policies (until their TTL) and lets each policy decide. If the cache is also cold and PostgreSQL is down, no per-policy mode is known and the service default applies (`rejectedBy: policy-catalog-unavailable` when failing closed).
+- **A circuit breaker stops every check from paying the timeout.** Without it, each degraded check waited for the 500ms Redis timeout, twice (generation read, then script). After a failure, Redis calls are skipped for `THROTTL_REDIS_BREAKER_OPEN_MS` (1000ms), then exactly one probe goes through; success closes the breaker. `FailureModeIntegrationTest` freezes a real Redis with `docker pause` (open sockets, no replies: what a hung node or a partition looks like) and checks that each mode decides, that degraded checks average well under the timeout, and that decisions come from Redis again after it resumes. The breaker is a small class rather than Resilience4j because it needs exactly one behavior, and the probe semantics are easier to test with an injected clock.
 
 ## Why authenticate the control plane separately?
 

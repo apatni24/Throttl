@@ -43,6 +43,7 @@ export function PolicyDetailPage() {
         <Fact label="Algorithm" value={policy.strategy.algorithm} />
         <Fact label="Configuration" value={configSummary(policy)} />
         <Fact label="Priority" value={String(policy.metadata.priority)} />
+        <Fact label="If Redis is down" value={policy.metadata.failureMode ?? 'Service default'} />
         <Fact label="Updated" value={policy.metadata.updatedAt ?? '—'} />
       </section>
       <p className="text-sm text-mute">

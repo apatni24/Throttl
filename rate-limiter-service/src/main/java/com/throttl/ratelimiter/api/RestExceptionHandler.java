@@ -33,6 +33,8 @@ public class RestExceptionHandler {
             message = "Invalid algorithm";
         } else if (detail.contains("RefillPeriod")) {
             message = "Invalid refill period";
+        } else if (detail.contains("FailureMode")) {
+            message = "Invalid failure mode";
         }
         return ResponseEntity.badRequest().body(ErrorResponse.of("validation_error", message));
     }

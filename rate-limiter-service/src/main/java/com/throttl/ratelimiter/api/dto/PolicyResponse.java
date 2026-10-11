@@ -1,5 +1,6 @@
 package com.throttl.ratelimiter.api.dto;
 
+import com.throttl.ratelimiter.domain.FailureMode;
 import com.throttl.ratelimiter.domain.Policy;
 import com.throttl.ratelimiter.store.PolicyMapper;
 
@@ -13,7 +14,13 @@ public record PolicyResponse(
         MetadataResponse metadata
 ) {
 
-    public record MetadataResponse(boolean enabled, int priority, Instant createdAt, Instant updatedAt) {
+    public record MetadataResponse(
+            boolean enabled,
+            int priority,
+            FailureMode failureMode,
+            Instant createdAt,
+            Instant updatedAt
+    ) {
     }
 
     public static PolicyResponse from(Policy policy) {
@@ -28,6 +35,7 @@ public record PolicyResponse(
                 new MetadataResponse(
                         policy.metadata().enabled(),
                         policy.metadata().priority(),
+                        policy.metadata().failureMode(),
                         policy.createdAt(),
                         policy.updatedAt()
                 )

@@ -29,7 +29,8 @@ export function SystemPage() {
           <Row label="Instance" value={info.data?.instanceId} />
           <Row label="Policy cache TTL" value={`${info.data?.cacheTtlSeconds} seconds`} />
           <Row label="Redis timeout" value={`${info.data?.redisTimeoutMs} ms`} />
-          <Row label="Failure mode" value={info.data?.failClosed ? 'FAIL_CLOSED' : 'FAIL_OPEN'} />
+          <Row label="Default failure mode" value={info.data?.failClosed ? 'FAIL_CLOSED' : 'FAIL_OPEN'} />
+          <Row label="Redis circuit" value={info.data?.redisCircuitOpen ? 'OPEN (degraded)' : 'CLOSED'} />
           <Row label="Application" value={`${info.data?.application} ${info.data?.version}`} />
           <Row label="Java" value={info.data?.javaVersion} />
           <Row label="Spring Boot" value={info.data?.springBootVersion} />

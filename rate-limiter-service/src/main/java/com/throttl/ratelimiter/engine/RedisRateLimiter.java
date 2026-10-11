@@ -46,17 +46,20 @@ public class RedisRateLimiter {
     private final DefaultRedisScript<Long> refundScript;
     private final RateLimitMetrics metrics;
     private final RateLimiterProperties properties;
+    private final RedisCircuitBreaker breaker;
 
     public RedisRateLimiter(
             StringRedisTemplate redisTemplate,
             ReactiveStringRedisTemplate reactiveRedisTemplate,
             RateLimitMetrics metrics,
-            RateLimiterProperties properties
+            RateLimiterProperties properties,
+            RedisCircuitBreaker breaker
     ) {
         this.redisTemplate = redisTemplate;
         this.reactiveRedisTemplate = reactiveRedisTemplate;
         this.metrics = metrics;
         this.properties = properties;
+        this.breaker = breaker;
         this.script = new DefaultRedisScript<>();
         this.script.setScriptSource(new ResourceScriptSource(new ClassPathResource("redis/rate_limit.lua")));
         this.script.setResultType(List.class);
@@ -85,14 +88,21 @@ public class RedisRateLimiter {
         if (policies.isEmpty()) {
             return List.of();
         }
+        if (!breaker.allowRequest()) {
+            metrics.incrementRedisShortCircuited();
+            throw new RedisUnavailableException();
+        }
         List<List<Integer>> groups = slotGroups(bucketKeys);
         Timer.Sample sample = Timer.start();
         try {
-            return groups.size() == 1
+            List<RateLimitDecision> decisions = groups.size() == 1
                     ? evaluateGroup(policies, bucketKeys, groups.getFirst())
                     : evaluateAcrossSlots(policies, bucketKeys, groups);
+            breaker.onSuccess();
+            return decisions;
         } catch (RuntimeException ex) {
             metrics.incrementRedisErrors();
+            breaker.onFailure(ex);
             throw ex;
         } finally {
             sample.stop(metrics.redisOperationTimer());
@@ -106,13 +116,21 @@ public class RedisRateLimiter {
         if (policies.isEmpty()) {
             return Mono.just(List.of());
         }
+        if (!breaker.allowRequest()) {
+            metrics.incrementRedisShortCircuited();
+            return Mono.error(new RedisUnavailableException());
+        }
         List<List<Integer>> groups = slotGroups(bucketKeys);
         Timer.Sample sample = Timer.start();
         Mono<List<RateLimitDecision>> result = groups.size() == 1
                 ? evaluateGroupReactive(policies, bucketKeys, groups.getFirst())
                 : evaluateAcrossSlotsReactive(policies, bucketKeys, groups);
         return result
-                .doOnError(error -> metrics.incrementRedisErrors())
+                .doOnSuccess(decisions -> breaker.onSuccess())
+                .doOnError(error -> {
+                    metrics.incrementRedisErrors();
+                    breaker.onFailure(error);
+                })
                 .doFinally(signal -> sample.stop(metrics.redisOperationTimer()));
     }
 

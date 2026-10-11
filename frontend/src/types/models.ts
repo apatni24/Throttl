@@ -1,6 +1,7 @@
 export type Scope = 'USER' | 'TENANT' | 'API' | 'IP'
 export type Algorithm = 'TOKEN_BUCKET' | 'SLIDING_WINDOW'
 export type RefillPeriod = 'SECOND' | 'MINUTE' | 'HOUR'
+export type FailureMode = 'FAIL_CLOSED' | 'FAIL_OPEN' | 'LOCAL_FALLBACK'
 
 export type TokenBucketConfiguration = {
   capacity: number
@@ -28,6 +29,7 @@ export type Policy = {
   metadata: {
     enabled: boolean
     priority: number
+    failureMode?: FailureMode | null
     createdAt?: string
     updatedAt?: string
   }
@@ -42,7 +44,14 @@ export type RateLimitContext = {
 
 export type PolicyEvaluation = {
   policyId: string
-  status: 'ALLOWED' | 'REJECTED' | 'SKIPPED'
+  status:
+    | 'ALLOWED'
+    | 'REJECTED'
+    | 'SKIPPED'
+    | 'FAILED_OPEN'
+    | 'FAILED_CLOSED'
+    | 'LOCAL_ALLOWED'
+    | 'LOCAL_REJECTED'
   remaining: number
   retryAfterMs: number
 }
@@ -53,6 +62,7 @@ export type RateLimitDecision = {
   retryAfterMs: number
   rejectedBy?: string
   evaluations?: PolicyEvaluation[]
+  degraded?: boolean
 }
 
 export type BurstResult = {
@@ -119,6 +129,8 @@ export type SystemInfo = {
   uptimeSeconds: number
   cacheTtlSeconds: number
   failClosed: boolean
+  defaultFailureMode?: FailureMode
+  redisCircuitOpen?: boolean
   redisTimeoutMs: number
   configuredInstances: number
   redisVersion: string

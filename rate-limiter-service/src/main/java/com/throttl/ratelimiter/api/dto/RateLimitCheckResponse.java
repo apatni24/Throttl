@@ -11,6 +11,7 @@ public record RateLimitCheckResponse(
         long remaining,
         long retryAfterMs,
         String rejectedBy,
-        List<PolicyEvaluation> evaluations
+        List<PolicyEvaluation> evaluations,
+        Boolean degraded
 ) {
 }

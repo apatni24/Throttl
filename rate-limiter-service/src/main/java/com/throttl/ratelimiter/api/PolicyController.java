@@ -77,7 +77,7 @@ public class PolicyController {
                 existing.name(),
                 existing.matching(),
                 existing.strategy(),
-                new PolicyMetadata(request.enabled(), existing.metadata().priority()),
+                new PolicyMetadata(request.enabled(), existing.metadata().priority(), existing.metadata().failureMode()),
                 existing.createdAt(),
                 existing.updatedAt()
         );

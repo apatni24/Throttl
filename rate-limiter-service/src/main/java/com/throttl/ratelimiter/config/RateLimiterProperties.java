@@ -9,7 +9,10 @@ import java.util.List;
 public class RateLimiterProperties {
 
     private long cacheTtlSeconds = 60;
+    /** Default for policies without an explicit failure mode: true = FAIL_CLOSED, false = FAIL_OPEN. */
     private boolean failClosed = true;
+    /** How long Redis calls are skipped after a failure before one probe is let through. */
+    private long redisBreakerOpenMs = 1000;
     private String instanceId = "local";
     private String environment = "LOCAL";
     private List<PeerInstance> instances = new ArrayList<>();
@@ -42,6 +45,14 @@ public class RateLimiterProperties {
 
     public void setFailClosed(boolean failClosed) {
         this.failClosed = failClosed;
+    }
+
+    public long redisBreakerOpenMs() {
+        return redisBreakerOpenMs;
+    }
+
+    public void setRedisBreakerOpenMs(long redisBreakerOpenMs) {
+        this.redisBreakerOpenMs = Math.max(0, redisBreakerOpenMs);
     }
 
     public String instanceId() {

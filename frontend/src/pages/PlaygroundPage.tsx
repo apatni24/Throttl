@@ -3,7 +3,7 @@ import { useMutation } from '@tanstack/react-query'
 import { rateLimiterApi } from '../api/rateLimiter'
 import { Button, ErrorState } from '../components/Ui'
 import { formatMs } from '../utils/format'
-import type { RateLimitContext, RateLimitDecision } from '../types/models'
+import type { PolicyEvaluation, RateLimitContext, RateLimitDecision } from '../types/models'
 
 export function PlaygroundPage() {
   const [context, setContext] = useState<RateLimitContext>({
@@ -86,6 +86,11 @@ function DecisionCard({ decision }: { decision: RateLimitDecision }) {
       </div>
       <p className="mt-2 font-mono text-sm">{remaining}</p>
       <p className="mt-4 text-sm text-mute">Retry after {formatMs(decision.retryAfterMs)}</p>
+      {decision.degraded ? (
+        <p className="mt-2 text-sm text-warn">
+          Redis unavailable: decided by each policy&apos;s failure mode.
+        </p>
+      ) : null}
       {decision.rejectedBy ? (
         <p className="mt-2 font-mono text-sm text-bad">Rejected by {decision.rejectedBy}</p>
       ) : null}
@@ -97,9 +102,11 @@ function DecisionCard({ decision }: { decision: RateLimitDecision }) {
           decision.evaluations?.map((evaluation) => (
             <div key={evaluation.policyId} className="flex items-center justify-between rounded-md bg-raised px-3 py-2">
               <span className="font-mono text-sm">{evaluation.policyId}</span>
-              <span className={evaluation.status === 'REJECTED' ? 'text-bad' : evaluation.status === 'ALLOWED' ? 'text-ok' : 'text-mute'}>
+              <span className={statusTone(evaluation.status)}>
                 {evaluation.status}
-                {evaluation.status !== 'SKIPPED' ? ` · ${evaluation.remaining} left` : ''}
+                {['ALLOWED', 'REJECTED', 'LOCAL_ALLOWED', 'LOCAL_REJECTED'].includes(evaluation.status)
+                  ? ` · ${evaluation.remaining} left`
+                  : ''}
               </span>
             </div>
           ))
@@ -107,4 +114,11 @@ function DecisionCard({ decision }: { decision: RateLimitDecision }) {
       </div>
     </div>
   )
+}
+
+function statusTone(status: PolicyEvaluation['status']): string {
+  if (status === 'REJECTED' || status === 'FAILED_CLOSED' || status === 'LOCAL_REJECTED') return 'text-bad'
+  if (status === 'ALLOWED' || status === 'LOCAL_ALLOWED') return 'text-ok'
+  if (status === 'FAILED_OPEN') return 'text-warn'
+  return 'text-mute'
 }

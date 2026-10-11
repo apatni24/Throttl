@@ -25,7 +25,7 @@ public final class PolicyMapper {
                 entity.getName(),
                 new Matching(entity.getScope(), entity.getConditions() == null ? Map.of() : entity.getConditions()),
                 new LimitingStrategy(entity.getAlgorithm(), configuration),
-                new PolicyMetadata(entity.isEnabled(), entity.getPriority()),
+                new PolicyMetadata(entity.isEnabled(), entity.getPriority(), entity.getFailureMode()),
                 entity.getCreatedAt(),
                 entity.getUpdatedAt()
         );
@@ -48,6 +48,7 @@ public final class PolicyMapper {
         entity.setConfiguration(fromConfiguration(policy.strategy().configuration()));
         entity.setEnabled(policy.metadata().enabled());
         entity.setPriority(policy.metadata().priority());
+        entity.setFailureMode(policy.metadata().failureMode());
     }
 
     public static LimitConfiguration toConfiguration(Algorithm algorithm, Map<String, Object> configuration) {

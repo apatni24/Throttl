@@ -2,6 +2,7 @@ package com.throttl.ratelimiter.api;
 
 import com.throttl.ratelimiter.api.dto.PolicyRequest;
 import com.throttl.ratelimiter.domain.Algorithm;
+import com.throttl.ratelimiter.domain.FailureMode;
 import com.throttl.ratelimiter.domain.LimitingStrategy;
 import com.throttl.ratelimiter.domain.Matching;
 import com.throttl.ratelimiter.domain.Policy;
@@ -41,6 +42,7 @@ public final class PolicyAssembler {
         int priority = request.metadata() == null || request.metadata().priority() == null
                 ? 0
                 : request.metadata().priority();
+        FailureMode failureMode = request.metadata() == null ? null : request.metadata().failureMode();
 
         try {
             return new Policy(
@@ -48,7 +50,7 @@ public final class PolicyAssembler {
                     request.name(),
                     new Matching(request.matching().scope(), cleanedConditions(request.matching().conditions())),
                     new LimitingStrategy(algorithm, PolicyMapper.toConfiguration(algorithm, configuration)),
-                    new PolicyMetadata(enabled, priority),
+                    new PolicyMetadata(enabled, priority, failureMode),
                     null,
                     null
             );

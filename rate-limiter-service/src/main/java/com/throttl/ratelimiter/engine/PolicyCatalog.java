@@ -32,15 +32,18 @@ public class PolicyCatalog {
     private final ReactiveStringRedisTemplate reactiveRedisTemplate;
     private final Cache<String, List<Policy>> cache;
     private final AtomicLong localGeneration = new AtomicLong(Long.MIN_VALUE);
+    private final RedisCircuitBreaker breaker;
 
     public PolicyCatalog(
             PolicyStore policyStore,
             RateLimitMetrics metrics,
             com.throttl.ratelimiter.config.RateLimiterProperties properties,
             StringRedisTemplate redisTemplate,
-            ReactiveStringRedisTemplate reactiveRedisTemplate
+            ReactiveStringRedisTemplate reactiveRedisTemplate,
+            RedisCircuitBreaker breaker
     ) {
         this.policyStore = policyStore;
+        this.breaker = breaker;
         this.metrics = metrics;
         this.redisTemplate = redisTemplate;
         this.reactiveRedisTemplate = reactiveRedisTemplate;
@@ -50,12 +53,25 @@ public class PolicyCatalog {
                 .build();
     }
 
+    /**
+     * The generation read is a freshness check, not a dependency: if Redis is
+     * unreachable the cached list is served (until its TTL), so the policies'
+     * own failure modes decide instead of the whole catalog failing.
+     */
     public List<Policy> enabledPolicies() {
-        return applyGeneration(currentGeneration());
+        return applyGeneration(generationOrLastKnown());
     }
 
     public Mono<List<Policy>> enabledPoliciesAsync() {
-        return currentGenerationAsync().flatMap(remote -> {
+        Mono<Long> generation = breaker.allowRequest()
+                ? currentGenerationAsync()
+                        .doOnSuccess(value -> breaker.onSuccess())
+                        .onErrorResume(RuntimeException.class, ex -> {
+                            breaker.onFailure(ex);
+                            return Mono.just(localGeneration.get());
+                        })
+                : Mono.just(localGeneration.get());
+        return generation.flatMap(remote -> {
             if (localGeneration.get() != remote) {
                 cache.invalidateAll();
                 localGeneration.set(remote);
@@ -97,6 +113,20 @@ public class PolicyCatalog {
         redisTemplate.opsForValue().increment(GENERATION_KEY);
         cache.invalidateAll();
         localGeneration.set(currentGeneration());
+    }
+
+    private long generationOrLastKnown() {
+        if (!breaker.allowRequest()) {
+            return localGeneration.get();
+        }
+        try {
+            long generation = currentGeneration();
+            breaker.onSuccess();
+            return generation;
+        } catch (RuntimeException ex) {
+            breaker.onFailure(ex);
+            return localGeneration.get();
+        }
     }
 
     private long currentGeneration() {

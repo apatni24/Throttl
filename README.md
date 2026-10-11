@@ -44,7 +44,7 @@ A policy has four parts:
 | Identity | `id`, `name` |
 | Matching | `scope` (`USER`, `TENANT`, `API`, `IP`) and `conditions` |
 | Strategy | `algorithm` + algorithm-specific `configuration` |
-| Metadata | `enabled`, `priority`, timestamps |
+| Metadata | `enabled`, `priority`, `failureMode`, timestamps |
 
 Algorithms: **TOKEN_BUCKET** and **SLIDING_WINDOW**. Algorithm-specific fields live inside `strategy.configuration`, not as top-level columns.
 
@@ -151,6 +151,14 @@ Rejected:
 ```
 
 A request must pass **every** applicable policy. The first failing policy (highest priority first) is returned in `rejectedBy`.
+
+### When Redis is down
+
+Each policy sets `metadata.failureMode`: `FAIL_CLOSED` (deny), `FAIL_OPEN` (allow), or `LOCAL_FALLBACK` (enforce `limit / instances` in process). Unset inherits `THROTTL_FAIL_CLOSED` (default true). Any matching `FAIL_CLOSED` policy denies the request. Decisions made without Redis carry `"degraded": true`. A circuit breaker skips Redis for `THROTTL_REDIS_BREAKER_OPEN_MS` (1000) after a failure, so degraded checks do not each wait out the 500ms timeout.
+
+```json
+"metadata": { "enabled": true, "priority": 10, "failureMode": "LOCAL_FALLBACK" }
+```
 
 ## Local setup
 

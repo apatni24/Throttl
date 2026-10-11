@@ -1,6 +1,7 @@
 package com.throttl.ratelimiter.ops;
 
 import com.throttl.ratelimiter.config.RateLimiterProperties;
+import com.throttl.ratelimiter.engine.RedisCircuitBreaker;
 import org.springframework.boot.SpringBootVersion;
 import org.springframework.boot.actuate.health.HealthComponent;
 import org.springframework.boot.actuate.health.HealthEndpoint;
@@ -23,15 +24,18 @@ public class SystemInfoService {
     private final HealthEndpoint healthEndpoint;
     private final DataSource dataSource;
     private final RedisConnectionFactory redisConnectionFactory;
+    private final RedisCircuitBreaker redisCircuitBreaker;
     private final RestClient restClient = RestClient.create();
 
     public SystemInfoService(
             RateLimiterProperties properties,
             HealthEndpoint healthEndpoint,
             DataSource dataSource,
-            RedisConnectionFactory redisConnectionFactory
+            RedisConnectionFactory redisConnectionFactory,
+            RedisCircuitBreaker redisCircuitBreaker
     ) {
         this.properties = properties;
+        this.redisCircuitBreaker = redisCircuitBreaker;
         this.healthEndpoint = healthEndpoint;
         this.dataSource = dataSource;
         this.redisConnectionFactory = redisConnectionFactory;
@@ -63,6 +67,8 @@ public class SystemInfoService {
         body.put("uptimeSeconds", ManagementFactory.getRuntimeMXBean().getUptime() / 1000);
         body.put("cacheTtlSeconds", properties.cacheTtlSeconds());
         body.put("failClosed", properties.failClosed());
+        body.put("defaultFailureMode", properties.failClosed() ? "FAIL_CLOSED" : "FAIL_OPEN");
+        body.put("redisCircuitOpen", redisCircuitBreaker.isOpen());
         body.put("redisTimeoutMs", 500);
         body.put("configuredInstances", properties.getInstances().size());
         body.put("redisVersion", redisVersion());

@@ -6,6 +6,7 @@ import { useToast } from '../components/Toast'
 import { Button, ErrorState, Skeleton } from '../components/Ui'
 import type {
   Algorithm,
+  FailureMode,
   Policy,
   RefillPeriod,
   Scope,
@@ -179,6 +180,26 @@ export function PolicyFormPage() {
             }
             className="w-full rounded-md border border-line bg-ink px-3 py-2 font-mono text-sm"
           />
+        </Field>
+        <Field label="If Redis is unavailable">
+          <select
+            value={policy.metadata.failureMode ?? ''}
+            onChange={(e) =>
+              setPolicy({
+                ...policy,
+                metadata: {
+                  ...policy.metadata,
+                  failureMode: (e.target.value || null) as FailureMode | null,
+                },
+              })
+            }
+            className="w-full rounded-md border border-line bg-ink px-3 py-2 text-sm"
+          >
+            <option value="">Service default</option>
+            <option value="FAIL_CLOSED">FAIL_CLOSED: deny (payments, login, abuse limits)</option>
+            <option value="FAIL_OPEN">FAIL_OPEN: allow (limits that must never block traffic)</option>
+            <option value="LOCAL_FALLBACK">LOCAL_FALLBACK: enforce limit ÷ instances in process</option>
+          </select>
         </Field>
         <label className="flex items-center gap-2 text-sm">
           <input

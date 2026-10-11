@@ -94,6 +94,37 @@ public class RateLimitMetrics {
         crossSlotRefunds.increment();
     }
 
+    public void incrementRedisShortCircuited() {
+        Counter.builder("redis_short_circuited_total")
+                .description("Redis calls skipped because the circuit breaker was open")
+                .register(registry)
+                .increment();
+    }
+
+    public void incrementBreakerOpened() {
+        Counter.builder("redis_circuit_opened_total")
+                .description("Times the Redis circuit breaker opened")
+                .register(registry)
+                .increment();
+    }
+
+    public void registerBreakerState(java.util.function.BooleanSupplier open) {
+        io.micrometer.core.instrument.Gauge.builder("redis_circuit_open", () -> open.getAsBoolean() ? 1 : 0)
+                .description("1 while Redis calls are being skipped")
+                .register(registry);
+    }
+
+    /** One per policy evaluated while Redis was unavailable. */
+    public void incrementDegraded(String policyId, String mode, boolean allowed) {
+        Counter.builder("rate_limit_degraded_total")
+                .description("Policy evaluations decided without Redis, by failure mode")
+                .tag("policy", policyId)
+                .tag("mode", mode)
+                .tag("outcome", allowed ? "allowed" : "rejected")
+                .register(registry)
+                .increment();
+    }
+
     public Timer checkLatencyTimer() {
         return checkLatency;
     }

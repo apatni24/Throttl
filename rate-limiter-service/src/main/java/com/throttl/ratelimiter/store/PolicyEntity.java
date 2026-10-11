@@ -1,6 +1,7 @@
 package com.throttl.ratelimiter.store;
 
 import com.throttl.ratelimiter.domain.Algorithm;
+import com.throttl.ratelimiter.domain.FailureMode;
 import com.throttl.ratelimiter.domain.Scope;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
@@ -49,6 +50,10 @@ public class PolicyEntity {
 
     @Column(nullable = false)
     private int priority;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "failure_mode", length = 32)
+    private FailureMode failureMode;
 
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
@@ -130,6 +135,14 @@ public class PolicyEntity {
 
     public void setPriority(int priority) {
         this.priority = priority;
+    }
+
+    public FailureMode getFailureMode() {
+        return failureMode;
+    }
+
+    public void setFailureMode(FailureMode failureMode) {
+        this.failureMode = failureMode;
     }
 
     public Instant getCreatedAt() {

@@ -22,7 +22,7 @@ docker compose start limiter-2
 docker compose restart redis
 ```
 
-While Redis is down, checks fail closed (`allowed: false`, `rejectedBy: redis-unavailable`) because `THROTTL_FAIL_CLOSED=true`. After Redis returns, buckets start empty (in-memory Redis has no persistence in this Compose file). Document that outcome rather than assuming tokens survive.
+While Redis is down, each policy applies its `failureMode` (see below). After Redis returns, buckets start fresh (in-memory Redis has no persistence in this Compose file), so every key can admit a full burst once. Document that outcome rather than assuming tokens survive.
 
 ## PostgreSQL unavailable
 
@@ -30,7 +30,7 @@ While Redis is down, checks fail closed (`allowed: false`, `rejectedBy: redis-un
 docker compose stop postgres
 ```
 
-Expected: cached policies (Caffeine, 60s TTL) continue to serve `/v1/check` until the cache expires. Policy CRUD fails. After TTL expiry, enabled-policy loads fail; checks then error or fail closed depending on the exception path.
+Expected: cached policies (Caffeine, 60s TTL) continue to serve `/v1/check` until the cache expires. Policy CRUD fails. After TTL expiry, enabled-policy loads fail and no per-policy failure mode is known, so the service default applies: `rejectedBy: policy-catalog-unavailable` with `THROTTL_FAIL_CLOSED=true`, allow with `degraded: true` otherwise.
 
 Restore:
 
@@ -38,7 +38,7 @@ Restore:
 docker compose start postgres
 ```
 
-## Redis unavailable (fail closed)
+## Redis unavailable (per-policy failure modes)
 
 ```bash
 docker compose stop redis
@@ -47,10 +47,12 @@ curl -s -X POST http://localhost:8080/v1/check \
   -d '{"userId":"u123","tenantId":"acme","api":"payment","ip":"10.0.0.1"}'
 ```
 
-Expected body:
+Expected body for a policy with no explicit mode (service default `THROTTL_FAIL_CLOSED=true`) or `FAIL_CLOSED`:
 
 ```json
-{"allowed":false,"remaining":0,"retryAfterMs":0,"rejectedBy":"redis-unavailable"}
+{"allowed":false,"remaining":0,"retryAfterMs":0,"rejectedBy":"redis-unavailable",
+ "evaluations":[{"policyId":"payment-user-limit","status":"FAILED_CLOSED","remaining":0,"retryAfterMs":0}],
+ "degraded":true}
 ```
 
-This protects downstream services when the limiter cannot make a reliable decision. Fail-open can be enabled later via `THROTTL_FAIL_CLOSED=false`.
+A `FAIL_OPEN` policy returns `allowed: true` with status `FAILED_OPEN`. A `LOCAL_FALLBACK` policy admits `limit / 3` per instance in this Compose file, then denies with `rejectedBy` set to the policy and status `LOCAL_REJECTED`. The first check after the outage starts waits for the Redis timeout once; later checks skip Redis while the circuit breaker is open (`redis_circuit_open` gauge, `redis_short_circuited_total`) and return in well under a millisecond of limiter time.

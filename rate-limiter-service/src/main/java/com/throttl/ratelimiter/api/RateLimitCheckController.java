@@ -41,7 +41,8 @@ public class RateLimitCheckController {
                 decision.remaining(),
                 decision.retryAfterMs(),
                 decision.rejectedBy(),
-                decision.evaluations()
+                decision.evaluations(),
+                decision.degraded() ? Boolean.TRUE : null
         );
     }
 }
