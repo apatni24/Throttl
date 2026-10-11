@@ -23,6 +23,8 @@ public class RateLimiterProperties {
      * false + pool enabled = dedicated connections from a GenericObjectPool.
      */
     private boolean redisShareNativeConnection = false;
+    /** true = bucket keys may live on different hash slots; evaluate per slot and refund on deny. */
+    private boolean redisCluster = false;
 
     public long cacheTtlSeconds() {
         return cacheTtlSeconds;
@@ -106,6 +108,14 @@ public class RateLimiterProperties {
 
     public void setRedisShareNativeConnection(boolean redisShareNativeConnection) {
         this.redisShareNativeConnection = redisShareNativeConnection;
+    }
+
+    public boolean redisCluster() {
+        return redisCluster;
+    }
+
+    public void setRedisCluster(boolean redisCluster) {
+        this.redisCluster = redisCluster;
     }
 
     public static class PeerInstance {

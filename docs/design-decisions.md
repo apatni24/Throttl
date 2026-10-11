@@ -16,9 +16,28 @@ Policies change rarely and must survive process restarts. PostgreSQL is the sour
 
 Token bucket models both a burst (`capacity`) and a sustained rate (`refillRate` / `refillPeriod`) with one piece of state. That matches API quotas: allow a short spike, then settle to a steady rate. Sliding and fixed windows can be added behind the same `RateLimitAlgorithm` interface when a product need appears.
 
+## Why does "now" come from Redis?
+
+The scripts used to receive `System.currentTimeMillis()` from whichever limiter handled the request. Three JVMs do not share a clock. An instance running ahead refills a bucket early and stamps a future `lastRefillTimestamp`; an instance running behind then sees negative elapsed time and refills nothing until its clock catches up. Effective rate depended on which instance nginx picked. The scripts now call `redis.call('TIME')`, so refill math runs against the one clock that owns the state. Calling `TIME` before a write needs script effects replication (Redis 5+; default in 7).
+
 ## Why no Redis Cluster in MVP?
 
-A single Redis instance already proves shared state across multiple limiter processes. Cluster adds topology, slot hashing, and failure modes that do not yet correspond to a measured bottleneck. Add it when one Redis node is the documented limit.
+A single Redis instance already proves shared state across multiple limiter processes. Cluster adds topology and failure modes that do not yet correspond to a measured bottleneck. Add it when one Redis node is the documented limit. The key layout and the cross-slot path below are in place so that move is a deployment change, not a rewrite.
+
+## Why `rl:{SCOPE:value}:policyId`?
+
+The all-or-nothing script touches every bucket that matches a request in one `EVAL`. Redis Cluster rejects a script whose keys hash to different slots. The old layout, `rl:<policyId>:<scopeValue>`, had no hash tag, so Redis hashed the whole key and two limits on one user (per second and per day) almost always landed on different slots.
+
+The hash tag is now the subject, `{USER:u123}`. Every policy on that user shares a slot and stays one atomic script, while different users still spread across the cluster. Tagging on the policy instead would put every user of a policy on one slot, which is a hot shard by design.
+
+Tagging cannot co-locate different subjects. A request matching a USER limit and a TENANT limit touches `{USER:u123}` and `{TENANT:acme}`, and the tenant bucket is shared by every user in the tenant. With `THROTTL_REDIS_CLUSTER=true`, the engine groups keys by slot (Lettuce `SlotHash`, the same CRC16 Redis uses), runs one atomic script per group, and refunds groups that consumed if any group denied. Properties:
+
+- **Never overspends.** A token is only kept if every group allowed.
+- **Can briefly under-admit.** Between consume and refund, a concurrent check sees one fewer token. That errs toward denial, which matches fail-closed.
+- **Refunds cannot starve.** The cross-slot check runs on one bound connection, so the refund never borrows from a pool that concurrent checks have drained. An earlier version borrowed per command; under 1000 concurrent checks six refunds timed out and those tokens leaked. `CrossSlotIntegrationTest` asserts exact conservation (`tokens == capacity - allowed`) to catch that.
+- **Refund failure is logged, not hidden.** If Redis itself fails mid-refund, the tokens stay spent until refill and `redis_errors_total` increments.
+
+Standalone Redis keeps the single-script path for every request; the tag is harmless there.
 
 ## What happens when Redis fails?
 

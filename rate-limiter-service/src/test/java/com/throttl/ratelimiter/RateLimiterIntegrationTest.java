@@ -188,12 +188,12 @@ class RateLimiterIntegrationTest {
 
         RateLimitCheckRequest request = new RateLimitCheckRequest("u123", "acme", "payment", "10.0.0.1");
         assertThat(engine.check(request).allowed()).isTrue();
-        assertThat(redisTemplate.opsForHash().get("rl:payment-user-limit:u123", "tokens")).isEqualTo("99");
+        assertThat(redisTemplate.opsForHash().get("rl:{USER:u123}:payment-user-limit", "tokens")).isEqualTo("99");
 
         RateLimitDecision denied = engine.check(request);
         assertThat(denied.allowed()).isFalse();
         assertThat(denied.rejectedBy()).isEqualTo("payment-tenant-limit");
-        assertThat(redisTemplate.opsForHash().get("rl:payment-user-limit:u123", "tokens"))
+        assertThat(redisTemplate.opsForHash().get("rl:{USER:u123}:payment-user-limit", "tokens"))
                 .as("a later policy reject must not consume tokens from earlier policies")
                 .isEqualTo("99");
     }
@@ -242,6 +242,21 @@ class RateLimiterIntegrationTest {
 
         assertThat(engine.check(new RateLimitCheckRequest(null, null, null, "1.1.1.1")).allowed()).isTrue();
         assertThat(engine.check(new RateLimitCheckRequest(null, null, null, "1.1.1.1")).allowed()).isFalse();
+    }
+
+    @Test
+    void policyUpdateDeletesThatPolicysBucketsOnly() {
+        createPolicy("payment-user-limit", "USER", 5, 1, "HOUR", "payment");
+        createPolicy("payment-tenant-limit", "TENANT", 5, 1, "HOUR", "payment");
+        engine.check(new RateLimitCheckRequest("u-reset", "acme", "payment", null));
+        assertThat(redisTemplate.hasKey("rl:{USER:u-reset}:payment-user-limit")).isTrue();
+        assertThat(redisTemplate.hasKey("rl:{TENANT:acme}:payment-tenant-limit")).isTrue();
+
+        restTemplate.put("/v1/policies/payment-user-limit",
+                json(policyJson("payment-user-limit", "USER", 10, 1, "HOUR", "payment")));
+
+        assertThat(redisTemplate.hasKey("rl:{USER:u-reset}:payment-user-limit")).isFalse();
+        assertThat(redisTemplate.hasKey("rl:{TENANT:acme}:payment-tenant-limit")).isTrue();
     }
 
     private void createPolicy(String id, String scope, long capacity, long refillRate, String period, String api) {

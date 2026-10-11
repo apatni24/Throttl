@@ -1,5 +1,6 @@
 package com.throttl.ratelimiter.engine;
 
+import com.throttl.ratelimiter.resolver.PolicyResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.redis.core.Cursor;
@@ -8,7 +9,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
 
 /**
- * Runtime token-bucket keys live in Redis as {@code rl:{policyId}:{scopeValue}}.
+ * Runtime token-bucket keys live in Redis as {@code rl:{SCOPE:value}:policyId}.
  * Policy configuration changes are incompatible with leftover token counts,
  * so we delete every bucket for that policy on update or delete.
  */
@@ -24,7 +25,7 @@ public class RuntimeBucketStore {
     }
 
     public void deleteBucketsForPolicy(String policyId) {
-        String pattern = "rl:" + policyId + ":*";
+        String pattern = PolicyResolver.bucketKeyPattern(policyId);
         int deleted = 0;
         ScanOptions options = ScanOptions.scanOptions().match(pattern).count(256).build();
         try (Cursor<String> cursor = redisTemplate.scan(options)) {

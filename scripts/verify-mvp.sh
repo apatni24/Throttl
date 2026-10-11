@@ -136,7 +136,7 @@ if [[ -n "$three" ]]; then
 fi
 
 note "Redis bucket keys"
-redis_dump=$(docker compose exec -T redis redis-cli HGETALL 'rl:test-user-policy:refill-user' || true)
+redis_dump=$(docker compose exec -T redis redis-cli HGETALL 'rl:{USER:refill-user}:test-user-policy' || true)
 echo "$redis_dump" | grep -q tokens && ok "Redis hash has tokens" || bad "Redis hash $redis_dump"
 echo "$redis_dump" | grep -q lastRefillTimestamp && ok "Redis hash has lastRefillTimestamp" || bad "Redis timestamp"
 
@@ -209,9 +209,9 @@ note "Policy change resets Redis buckets"
 clear_policies
 put_policy test-user-policy "$POLICY5"
 for _ in 1 2 3 4 5; do check '{"userId":"reset-user","api":"test"}' >/dev/null; done
-before=$(docker compose exec -T redis redis-cli EXISTS 'rl:test-user-policy:reset-user')
+before=$(docker compose exec -T redis redis-cli EXISTS 'rl:{USER:reset-user}:test-user-policy')
 json -X PUT "$BASE/v1/policies/test-user-policy" -d "$POLICY5" >/dev/null
-after=$(docker compose exec -T redis redis-cli EXISTS 'rl:test-user-policy:reset-user')
+after=$(docker compose exec -T redis redis-cli EXISTS 'rl:{USER:reset-user}:test-user-policy')
 [[ "$before" == "1" && "$after" == "0" ]] && ok "PUT deletes existing buckets" || bad "bucket reset before=$before after=$after"
 fresh=$(check '{"userId":"reset-user","api":"test"}')
 echo "$fresh" | grep -q '"remaining":4' && ok "new capacity applied after reset" || bad "fresh $fresh"

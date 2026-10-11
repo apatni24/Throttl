@@ -50,6 +50,7 @@ throttl:
   fail-closed: ${THROTTL_FAIL_CLOSED:true}
   check-io: ${THROTTL_CHECK_IO:sync}
   redis-share-native-connection: ${THROTTL_REDIS_SHARE_NATIVE:false}
+  redis-cluster: ${THROTTL_REDIS_CLUSTER:false}
   instance-id: ${THROTTL_INSTANCE_ID:local}
   environment: ${THROTTL_ENVIRONMENT:LOCAL}
   prometheus-url: ${THROTTL_PROMETHEUS_URL:http://localhost:9090}

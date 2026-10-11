@@ -3,8 +3,11 @@
 -- ARGV[1] = capacity
 -- ARGV[2] = refillRate
 -- ARGV[3] = refillPeriodMs
--- ARGV[4] = nowMs
--- ARGV[5] = requested tokens
+-- ARGV[4] = requested tokens
+--
+-- "now" comes from the Redis server clock so every limiter instance refills
+-- against the same time source. Calling TIME before writes requires Redis >= 5
+-- (script effects replication).
 --
 -- Returns: {allowed (0|1), remaining, retryAfterMs}
 
@@ -12,8 +15,10 @@ local key = KEYS[1]
 local capacity = tonumber(ARGV[1])
 local refill_rate = tonumber(ARGV[2])
 local refill_period_ms = tonumber(ARGV[3])
-local now = tonumber(ARGV[4])
-local requested = tonumber(ARGV[5])
+local requested = tonumber(ARGV[4])
+
+local time = redis.call('TIME')
+local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
 
 local data = redis.call('HMGET', key, 'tokens', 'lastRefillTimestamp')
 local tokens = tonumber(data[1])

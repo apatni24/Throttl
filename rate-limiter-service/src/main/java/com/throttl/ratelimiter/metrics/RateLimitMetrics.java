@@ -14,6 +14,7 @@ public class RateLimitMetrics {
     private final Counter cacheHits;
     private final Counter cacheMisses;
     private final Counter redisErrors;
+    private final Counter crossSlotRefunds;
     private final Timer checkLatency;
     private final Timer redisOperation;
     private final Timer generationGet;
@@ -35,6 +36,9 @@ public class RateLimitMetrics {
                 .register(registry);
         this.redisErrors = Counter.builder("redis_errors_total")
                 .description("Redis operation errors")
+                .register(registry);
+        this.crossSlotRefunds = Counter.builder("rate_limit_cross_slot_refunds_total")
+                .description("Slot groups refunded because another slot group denied the request")
                 .register(registry);
         this.checkLatency = Timer.builder("rate_limit_check_latency_seconds")
                 .description("End-to-end check latency")
@@ -84,6 +88,10 @@ public class RateLimitMetrics {
 
     public void incrementRedisErrors() {
         redisErrors.increment();
+    }
+
+    public void incrementCrossSlotRefunds() {
+        crossSlotRefunds.increment();
     }
 
     public Timer checkLatencyTimer() {

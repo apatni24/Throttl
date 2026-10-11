@@ -76,7 +76,11 @@ A bucket starts full (`capacity` tokens). Each allowed request consumes one toke
 
 ## Redis and Lua
 
-Runtime keys look like `rl:<policyId>:<scopeValue>` and store a hash of `tokens` and `lastRefillTimestamp`. The Lua script reads, refills, consumes, and writes in one Redis execution so two concurrent checks cannot both spend the last token.
+Runtime keys look like `rl:{SCOPE:value}:policyId` (for example `rl:{USER:u123}:payment-user-limit`) and store a hash of `tokens` and `lastRefillTimestamp`. The Lua script reads, refills, consumes, and writes in one Redis execution so two concurrent checks cannot both spend the last token.
+
+The script reads "now" from Redis `TIME`, not from the limiter JVM, so every instance refills against one clock.
+
+The braces are a Redis Cluster hash tag: every policy on the same subject lands on one slot and is consumed in one atomic script. With `THROTTL_REDIS_CLUSTER=true`, a request whose policies span slots (a USER and a TENANT limit, say) runs one atomic script per slot and refunds the slots that consumed if any slot denies. That path can briefly deny early under contention; it never overspends. Refunds are counted in `rate_limit_cross_slot_refunds_total`.
 
 ## PostgreSQL
 
@@ -196,7 +200,7 @@ Direct instances for the distributed proof: `http://localhost:8081`, `:8082`, `:
 ./gradlew test
 ```
 
-Unit tests cover policy validation, matching, refill, consumption, burst, and multi-policy AND semantics. Integration tests use Testcontainers (PostgreSQL + Redis) for CRUD, token-bucket behavior, all four scopes, and 1000 concurrent checks against capacity 100.
+Unit tests cover policy validation, matching, refill, consumption, burst, multi-policy AND semantics, and hash-slot co-location of one subject's keys. Integration tests use Testcontainers (PostgreSQL + Redis) for CRUD, token-bucket behavior, all four scopes, per-policy bucket reset, and 1000 concurrent checks against capacity 100. `CrossSlotIntegrationTest` runs the cluster code path: a denial on one slot refunds the other, and 1000 concurrent USER+TENANT checks never overspend and leave every bucket at exactly `capacity - allowed`.
 
 MVP acceptance (CRUD, refill, isolation, shared Redis, Prometheus):
 
@@ -225,7 +229,7 @@ See [docs/failure-testing.md](docs/failure-testing.md). Redis outages fail close
 
 ## Design decisions
 
-See [docs/design-decisions.md](docs/design-decisions.md) for why Redis, Lua, PostgreSQL, token bucket, a single Redis node, fail-closed, and the split between policy data and algorithm code.
+See [docs/design-decisions.md](docs/design-decisions.md) for why Redis, Lua, PostgreSQL, token bucket, a single Redis node, fail-closed, the Redis clock, the hash-tagged key layout, and the split between policy data and algorithm code.
 
 ## Spring Boot client
 

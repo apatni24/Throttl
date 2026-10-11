@@ -9,7 +9,7 @@ The MVP is complete only if these six claims hold:
 5. Multiple limiter instances share one Redis limit (global, not per process).
 6. The system performs reasonably under load, with Prometheus/Grafana showing real traffic.
 
-Policy configuration lives in PostgreSQL. Token counts live in Redis. Changing a policy **deletes** `rl:<policyId>:*` so leftover tokens are not mixed with a new capacity. Policy-cache invalidation is a Redis generation counter so all three instances drop stale Caffeine entries.
+Policy configuration lives in PostgreSQL. Token counts live in Redis. Changing a policy **deletes** `rl:{*}:<policyId>` so leftover tokens are not mixed with a new capacity. Policy-cache invalidation is a Redis generation counter so all three instances drop stale Caffeine entries.
 
 Ran 2026-08-20: `docker compose down -v && docker compose up --build -d` then `./scripts/verify-mvp.sh`, k6, and failure drills.
 
@@ -47,8 +47,10 @@ Health: `GET http://localhost:8080/actuator/health` → `status: UP` with Postgr
 ## Distributed
 
 - [x] 3 rate limiter instances (`8081` `8082` `8083`)
-- [x] Shared Redis state (`HGETALL rl:<policy>:<user>` has `tokens` + `lastRefillTimestamp`)
-- [x] Global limit maintained (verify script 300 req → 100 allow; k6 1000 req → 100 allow)
+- [x] Shared Redis state (`HGETALL rl:{USER:user}:policy` has `tokens` + `lastRefillTimestamp`)
+- [x] Global limit maintained (verify script 300 req → 100 allow; k6 1000 req → 100 allow; re-run 2026-10-11 with the same result)
+- [x] Refill timestamps come from Redis `TIME`, not the limiter JVM
+- [x] Cluster code path (`THROTTL_REDIS_CLUSTER=true`): cross-slot denial refunds the other slot; 1000 concurrent USER+TENANT checks never overspend and conserve tokens exactly (`CrossSlotIntegrationTest`, 5/5 repeated runs)
 
 ## Observability
 

@@ -1,8 +1,9 @@
 -- Atomic AND across N token buckets: consume every key or none.
--- KEYS[1..n] = bucket keys
--- ARGV[1] = nowMs
--- ARGV[2] = requested tokens
--- ARGV[3..] = repeating triples: capacity, refillRate, refillPeriodMs
+-- KEYS[1..n] = bucket keys (must share a hash slot on Redis Cluster)
+-- ARGV[1] = requested tokens
+-- ARGV[2..] = repeating triples: capacity, refillRate, refillPeriodMs
+--
+-- "now" comes from the Redis server clock (see token_bucket.lua).
 --
 -- Returns a flat array:
 --   [1] overall allowed (0|1)
@@ -10,11 +11,13 @@
 --   then per key: remaining, retryAfterMs, wouldAllow (0|1)
 
 local n = #KEYS
-local now = tonumber(ARGV[1])
-local requested = tonumber(ARGV[2])
-if n < 1 or #ARGV ~= 2 + (n * 3) then
+local requested = tonumber(ARGV[1])
+if n < 1 or #ARGV ~= 1 + (n * 3) then
   return redis.error_reply('token_bucket_and argv mismatch')
 end
+
+local time = redis.call('TIME')
+local now = tonumber(time[1]) * 1000 + math.floor(tonumber(time[2]) / 1000)
 
 local tokens = {}
 local last_ts = {}
@@ -28,7 +31,7 @@ local first_deny = 0
 local all_allowed = 1
 
 for i = 1, n do
-  local base = 2 + ((i - 1) * 3)
+  local base = 1 + ((i - 1) * 3)
   local capacity = tonumber(ARGV[base + 1])
   local refill_rate = tonumber(ARGV[base + 2])
   local refill_period_ms = tonumber(ARGV[base + 3])

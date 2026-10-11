@@ -48,8 +48,18 @@ public final class PolicyResolver {
         };
     }
 
+    /**
+     * {@code rl:{SCOPE:value}:policyId}. The braces are a Redis Cluster hash tag:
+     * every policy limiting the same subject lands on one slot and can be
+     * consumed in one atomic script, while different subjects still spread out.
+     */
     public static String bucketKey(Policy policy, RateLimitCheckRequest request) {
-        return "rl:" + policy.id() + ":" + scopeValue(policy, request);
+        return "rl:{" + policy.matching().scope() + ":" + scopeValue(policy, request) + "}:" + policy.id();
+    }
+
+    /** SCAN pattern for every bucket of one policy. Policy ids cannot contain glob characters. */
+    public static String bucketKeyPattern(String policyId) {
+        return "rl:{*}:" + policyId;
     }
 
     private static boolean hasScopeValue(Scope scope, RateLimitCheckRequest request) {
