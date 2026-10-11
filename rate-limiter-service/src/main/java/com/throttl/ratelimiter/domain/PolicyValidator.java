@@ -42,10 +42,7 @@ public final class PolicyValidator {
         if (matching.scope() == null) {
             throw new PolicyValidationException("Invalid scope");
         }
-        Map<String, String> conditions = matching.conditions();
-        if (conditions == null) {
-            throw new PolicyValidationException("Conditions must be present (use an empty object if none)");
-        }
+        Map<String, String> conditions = matching.conditions() == null ? Map.of() : matching.conditions();
         for (Map.Entry<String, String> entry : conditions.entrySet()) {
             if (entry.getKey() == null || entry.getKey().isBlank()) {
                 throw new PolicyValidationException("Condition keys must be non-blank");

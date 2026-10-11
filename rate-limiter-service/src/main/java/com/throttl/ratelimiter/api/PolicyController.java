@@ -1,14 +1,18 @@
 package com.throttl.ratelimiter.api;
 
+import com.throttl.ratelimiter.api.dto.EnabledRequest;
 import com.throttl.ratelimiter.api.dto.PolicyRequest;
 import com.throttl.ratelimiter.api.dto.PolicyResponse;
 import com.throttl.ratelimiter.engine.PolicyCatalog;
 import com.throttl.ratelimiter.engine.RuntimeBucketStore;
+import com.throttl.ratelimiter.domain.Policy;
+import com.throttl.ratelimiter.domain.PolicyMetadata;
 import com.throttl.ratelimiter.store.PolicyNotFoundException;
 import com.throttl.ratelimiter.store.PolicyStore;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -61,6 +65,23 @@ public class PolicyController {
     public PolicyResponse update(@PathVariable String id, @RequestBody PolicyRequest request) {
         PolicyResponse response = PolicyResponse.from(policyStore.update(id, PolicyAssembler.fromRequest(request)));
         runtimeBucketStore.deleteBucketsForPolicy(id);
+        policyCatalog.invalidate();
+        return response;
+    }
+
+    @PatchMapping("/{id}/enabled")
+    public PolicyResponse setEnabled(@PathVariable String id, @RequestBody EnabledRequest request) {
+        Policy existing = policyStore.findById(id).orElseThrow(() -> new PolicyNotFoundException(id));
+        Policy next = new Policy(
+                existing.id(),
+                existing.name(),
+                existing.matching(),
+                existing.strategy(),
+                new PolicyMetadata(request.enabled(), existing.metadata().priority()),
+                existing.createdAt(),
+                existing.updatedAt()
+        );
+        PolicyResponse response = PolicyResponse.from(policyStore.update(id, next));
         policyCatalog.invalidate();
         return response;
     }

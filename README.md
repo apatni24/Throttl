@@ -76,7 +76,7 @@ A bucket starts full (`capacity` tokens). Each allowed request consumes one toke
 
 ## Redis and Lua
 
-Runtime keys look like `rl:{policyId}:{scopeValue}` and store a hash of `tokens` and `lastRefillTimestamp`. The Lua script reads, refills, consumes, and writes in one Redis execution so two concurrent checks cannot both spend the last token.
+Runtime keys look like `rl:<policyId>:<scopeValue>` and store a hash of `tokens` and `lastRefillTimestamp`. The Lua script reads, refills, consumes, and writes in one Redis execution so two concurrent checks cannot both spend the last token.
 
 ## PostgreSQL
 
@@ -151,6 +151,15 @@ docker compose up --build
 | Demo payment service | http://localhost:8090 |
 | Prometheus | http://localhost:9090 |
 | Grafana | http://localhost:3000 |
+| Throttl console | http://localhost:8088 |
+
+The operator console talks only to the limiter API at `http://127.0.0.1:8080`. Dev:
+
+```bash
+cd frontend && npm install && npm run dev
+```
+
+CORS allows `localhost:5173`. Keep `docker compose` (or the service on `:8080`) running while using the UI.
 
 Create a policy and check it:
 
@@ -208,7 +217,7 @@ k6 run -e RATE=1000 -e DURATION=60s load-test/k6-load.js
 k6 run -e RATE=5000 -e DURATION=30s load-test/k6-load.js
 ```
 
-Record measured numbers in [docs/benchmarks.md](docs/benchmarks.md). Do not invent results.
+Measured results, including the before/after of connection pooling, are in [docs/benchmarks.md](docs/benchmarks.md). `load-test/io-isolation.py` reruns the shared vs pooled vs async comparison on a fresh stack.
 
 ## Failure testing
 

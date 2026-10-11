@@ -29,16 +29,37 @@ class RateLimitEngineTest {
         PolicyCatalog catalog = mock(PolicyCatalog.class);
         TokenBucketAlgorithm algorithm = mock(TokenBucketAlgorithm.class);
         when(catalog.enabledPolicies()).thenReturn(List.of(policy()));
-        when(algorithm.evaluate(any(), any())).thenThrow(new RuntimeException("Redis down"));
+        when(algorithm.evaluateAll(any(), any())).thenThrow(new RuntimeException("Redis down"));
 
         RateLimitEngine engine = new RateLimitEngine(
                 catalog,
                 algorithm,
                 new RateLimitMetrics(new SimpleMeterRegistry()),
-                new RateLimiterProperties(60, true)
+                new RateLimiterProperties()
         );
 
         RateLimitDecision decision = engine.check(new RateLimitCheckRequest("u1", "t1", "payment", "1.1.1.1"));
+        assertThat(decision.allowed()).isFalse();
+        assertThat(decision.rejectedBy()).isEqualTo("redis-unavailable");
+    }
+
+    @Test
+    void failClosedWhenReactiveRedisThrows() {
+        PolicyCatalog catalog = mock(PolicyCatalog.class);
+        TokenBucketAlgorithm algorithm = mock(TokenBucketAlgorithm.class);
+        when(catalog.enabledPoliciesAsync()).thenReturn(reactor.core.publisher.Mono.just(List.of(policy())));
+        when(algorithm.evaluateAllReactive(any(), any()))
+                .thenReturn(reactor.core.publisher.Mono.error(new RuntimeException("Redis down")));
+
+        RateLimitEngine engine = new RateLimitEngine(
+                catalog,
+                algorithm,
+                new RateLimitMetrics(new SimpleMeterRegistry()),
+                new RateLimiterProperties()
+        );
+
+        RateLimitDecision decision = engine.checkReactive(new RateLimitCheckRequest("u1", "t1", "payment", "1.1.1.1"))
+                .block();
         assertThat(decision.allowed()).isFalse();
         assertThat(decision.rejectedBy()).isEqualTo("redis-unavailable");
     }
@@ -51,7 +72,7 @@ class RateLimitEngineTest {
                 catalog,
                 mock(TokenBucketAlgorithm.class),
                 new RateLimitMetrics(new SimpleMeterRegistry()),
-                new RateLimiterProperties(60, true)
+                new RateLimiterProperties()
         );
         assertThat(engine.check(new RateLimitCheckRequest("u1", "t1", "payment", "1.1.1.1")).allowed()).isTrue();
     }

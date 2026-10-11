@@ -9,6 +9,7 @@ import com.throttl.ratelimiter.domain.PolicyMetadata;
 import com.throttl.ratelimiter.domain.PolicyValidationException;
 import com.throttl.ratelimiter.store.PolicyMapper;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 public final class PolicyAssembler {
@@ -44,7 +45,7 @@ public final class PolicyAssembler {
             return new Policy(
                     request.id(),
                     request.name(),
-                    new Matching(request.matching().scope(), request.matching().conditions()),
+                    new Matching(request.matching().scope(), cleanedConditions(request.matching().conditions())),
                     new LimitingStrategy(
                             request.strategy().algorithm(),
                             PolicyMapper.toTokenBucketConfiguration(configuration)
@@ -56,5 +57,22 @@ public final class PolicyAssembler {
         } catch (IllegalArgumentException ex) {
             throw new PolicyValidationException(ex.getMessage());
         }
+    }
+
+    static Map<String, String> cleanedConditions(Map<String, String> conditions) {
+        if (conditions == null || conditions.isEmpty()) {
+            return Map.of();
+        }
+        Map<String, String> cleaned = new LinkedHashMap<>();
+        for (Map.Entry<String, String> entry : conditions.entrySet()) {
+            if (entry.getKey() == null || entry.getKey().isBlank()) {
+                continue;
+            }
+            if (entry.getValue() == null || entry.getValue().isBlank()) {
+                continue;
+            }
+            cleaned.put(entry.getKey().trim(), entry.getValue().trim());
+        }
+        return cleaned;
     }
 }

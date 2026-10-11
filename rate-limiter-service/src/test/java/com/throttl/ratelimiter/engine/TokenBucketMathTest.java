@@ -4,6 +4,9 @@ import com.throttl.ratelimiter.domain.RefillPeriod;
 import com.throttl.ratelimiter.domain.TokenBucketConfiguration;
 import org.junit.jupiter.api.Test;
 
+import java.util.Arrays;
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class TokenBucketMathTest {
@@ -57,15 +60,28 @@ class TokenBucketMathTest {
 
     @Test
     void multiplePoliciesRequireAllToPass() {
-        TokenBucketMath.ConsumeResult user = TokenBucketMath.consume(null, CONFIG, 0, 1);
         TokenBucketConfiguration tight = new TokenBucketConfiguration(1, 1, RefillPeriod.MINUTE);
-        TokenBucketMath.ConsumeResult tenantFirst = TokenBucketMath.consume(null, tight, 0, 1);
-        TokenBucketMath.ConsumeResult tenantSecond = TokenBucketMath.consume(tenantFirst.state(), tight, 0, 1);
+        List<TokenBucketMath.ConsumeResult> first = TokenBucketMath.consumeAllOrNone(
+                Arrays.asList(null, null),
+                List.of(CONFIG, tight),
+                0,
+                1
+        );
+        assertThat(first.get(0).allowed()).isTrue();
+        assertThat(first.get(1).allowed()).isTrue();
+        assertThat(first.get(0).remaining()).isEqualTo(99);
+        assertThat(first.get(1).remaining()).isZero();
 
-        boolean overall = user.allowed() && tenantSecond.allowed();
-        assertThat(user.allowed()).isTrue();
-        assertThat(tenantSecond.allowed()).isFalse();
-        assertThat(overall).isFalse();
+        List<TokenBucketMath.ConsumeResult> second = TokenBucketMath.consumeAllOrNone(
+                List.of(first.get(0).state(), first.get(1).state()),
+                List.of(CONFIG, tight),
+                0,
+                1
+        );
+        assertThat(second.get(0).allowed()).isTrue();
+        assertThat(second.get(0).remaining()).isEqualTo(99);
+        assertThat(second.get(1).allowed()).isFalse();
+        assertThat(second.stream().anyMatch(result -> !result.allowed())).isTrue();
     }
 
     private static TokenBucketMath.ConsumeResult drain(TokenBucketConfiguration configuration, long now) {

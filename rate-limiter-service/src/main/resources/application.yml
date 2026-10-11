@@ -19,6 +19,13 @@ spring:
       port: ${SPRING_DATA_REDIS_PORT:6379}
       timeout: 500ms
       connect-timeout: 500ms
+      lettuce:
+        pool:
+          enabled: ${THROTTL_REDIS_POOL_ENABLED:true}
+          max-active: ${THROTTL_REDIS_POOL_MAX_ACTIVE:32}
+          max-idle: ${THROTTL_REDIS_POOL_MAX_IDLE:32}
+          min-idle: ${THROTTL_REDIS_POOL_MIN_IDLE:8}
+          max-wait: ${THROTTL_REDIS_POOL_MAX_WAIT:500ms}
 
 management:
   endpoints:
@@ -41,9 +48,26 @@ management:
 throttl:
   cache-ttl-seconds: ${THROTTL_CACHE_TTL_SECONDS:60}
   fail-closed: ${THROTTL_FAIL_CLOSED:true}
+  check-io: ${THROTTL_CHECK_IO:sync}
+  redis-share-native-connection: ${THROTTL_REDIS_SHARE_NATIVE:false}
+  instance-id: ${THROTTL_INSTANCE_ID:local}
+  environment: ${THROTTL_ENVIRONMENT:LOCAL}
+  prometheus-url: ${THROTTL_PROMETHEUS_URL:http://localhost:9090}
+  grafana-url: ${THROTTL_GRAFANA_URL:http://localhost:3000}
+  cors-origins: ${THROTTL_CORS_ORIGINS:http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173,http://localhost:8088}
+  instances:
+    - id: limiter-1
+      url: ${THROTTL_LIMITER_1_URL:http://localhost:8081}
+    - id: limiter-2
+      url: ${THROTTL_LIMITER_2_URL:http://localhost:8082}
+    - id: limiter-3
+      url: ${THROTTL_LIMITER_3_URL:http://localhost:8083}
 
 server:
   port: ${SERVER_PORT:8080}
+  tomcat:
+    mbeanregistry:
+      enabled: true
 
 logging:
   level:

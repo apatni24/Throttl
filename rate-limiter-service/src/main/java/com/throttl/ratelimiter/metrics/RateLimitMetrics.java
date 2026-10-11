@@ -16,6 +16,8 @@ public class RateLimitMetrics {
     private final Counter redisErrors;
     private final Timer checkLatency;
     private final Timer redisOperation;
+    private final Timer generationGet;
+    private final Timer policyResolution;
 
     public RateLimitMetrics(MeterRegistry registry) {
         this.registry = registry;
@@ -40,7 +42,17 @@ public class RateLimitMetrics {
                 .publishPercentileHistogram()
                 .register(registry);
         this.redisOperation = Timer.builder("redis_operation_latency_seconds")
-                .description("Redis Lua operation latency")
+                .description("Token-bucket Redis EVAL/EVALSHA latency")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .publishPercentileHistogram()
+                .register(registry);
+        this.generationGet = Timer.builder("policy_generation_get_latency_seconds")
+                .description("Redis GET of policy:generation")
+                .publishPercentiles(0.5, 0.95, 0.99)
+                .publishPercentileHistogram()
+                .register(registry);
+        this.policyResolution = Timer.builder("policy_resolution_latency_seconds")
+                .description("In-memory policy matching after catalog load")
                 .publishPercentiles(0.5, 0.95, 0.99)
                 .publishPercentileHistogram()
                 .register(registry);
@@ -80,5 +92,13 @@ public class RateLimitMetrics {
 
     public Timer redisOperationTimer() {
         return redisOperation;
+    }
+
+    public Timer generationGetTimer() {
+        return generationGet;
+    }
+
+    public Timer policyResolutionTimer() {
+        return policyResolution;
     }
 }

@@ -15,4 +15,8 @@ bin/
 .settings/
 *.swp
 .kotlin/
+frontend/node_modules/
+frontend/dist/
 load-test/results/
+__pycache__/
+*.pyc

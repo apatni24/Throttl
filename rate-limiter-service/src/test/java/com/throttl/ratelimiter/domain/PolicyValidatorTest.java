@@ -143,6 +143,20 @@ class PolicyValidatorTest {
     }
 
     @Test
+    void acceptsEmptyConditions() {
+        Policy policy = new Policy(
+                "payment-user-limit",
+                "n",
+                new Matching(Scope.USER, Map.of()),
+                strategy(),
+                metadata(),
+                null,
+                null
+        );
+        PolicyValidator.validate(policy);
+    }
+
+    @Test
     void allMvpScopesAreValid() {
         for (Scope scope : Scope.values()) {
             Policy policy = new Policy(

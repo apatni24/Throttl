@@ -163,6 +163,24 @@ class RateLimiterIntegrationTest {
     }
 
     @Test
+    void reactiveTokenBucketAllowsThenRejects() {
+        createPolicy("payment-user-limit", "USER", 5, 1, "MINUTE", "payment");
+        RateLimitCheckRequest request = new RateLimitCheckRequest("u-reactive", "acme", "payment", "10.0.0.1");
+
+        int allowed = 0;
+        RateLimitDecision last = null;
+        for (int i = 0; i < 6; i++) {
+            last = engine.checkReactive(request).block();
+            if (last.allowed()) {
+                allowed++;
+            }
+        }
+        assertThat(allowed).isEqualTo(5);
+        assertThat(last.allowed()).isFalse();
+        assertThat(last.rejectedBy()).isEqualTo("payment-user-limit");
+    }
+
+    @Test
     void multiplePoliciesMustAllPass() {
         createPolicy("payment-user-limit", "USER", 100, 10, "MINUTE", "payment");
         createPolicy("payment-tenant-limit", "TENANT", 1, 1, "MINUTE", "payment");
@@ -170,9 +188,14 @@ class RateLimiterIntegrationTest {
 
         RateLimitCheckRequest request = new RateLimitCheckRequest("u123", "acme", "payment", "10.0.0.1");
         assertThat(engine.check(request).allowed()).isTrue();
+        assertThat(redisTemplate.opsForHash().get("rl:payment-user-limit:u123", "tokens")).isEqualTo("99");
+
         RateLimitDecision denied = engine.check(request);
         assertThat(denied.allowed()).isFalse();
         assertThat(denied.rejectedBy()).isEqualTo("payment-tenant-limit");
+        assertThat(redisTemplate.opsForHash().get("rl:payment-user-limit:u123", "tokens"))
+                .as("a later policy reject must not consume tokens from earlier policies")
+                .isEqualTo("99");
     }
 
     @Test

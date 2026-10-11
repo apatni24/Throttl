@@ -9,7 +9,7 @@ The MVP is complete only if these six claims hold:
 5. Multiple limiter instances share one Redis limit (global, not per process).
 6. The system performs reasonably under load, with Prometheus/Grafana showing real traffic.
 
-Policy configuration lives in PostgreSQL. Token counts live in Redis. Changing a policy **deletes** `rl:{policyId}:*` so leftover tokens are not mixed with a new capacity. Policy-cache invalidation is a Redis generation counter so all three instances drop stale Caffeine entries.
+Policy configuration lives in PostgreSQL. Token counts live in Redis. Changing a policy **deletes** `rl:<policyId>:*` so leftover tokens are not mixed with a new capacity. Policy-cache invalidation is a Redis generation counter so all three instances drop stale Caffeine entries.
 
 Ran 2026-08-20: `docker compose down -v && docker compose up --build -d` then `./scripts/verify-mvp.sh`, k6, and failure drills.
 
@@ -47,7 +47,7 @@ Health: `GET http://localhost:8080/actuator/health` → `status: UP` with Postgr
 ## Distributed
 
 - [x] 3 rate limiter instances (`8081` `8082` `8083`)
-- [x] Shared Redis state (`HGETALL rl:{policy}:{user}` has `tokens` + `lastRefillTimestamp`)
+- [x] Shared Redis state (`HGETALL rl:<policy>:<user>` has `tokens` + `lastRefillTimestamp`)
 - [x] Global limit maintained (verify script 300 req → 100 allow; k6 1000 req → 100 allow)
 
 ## Observability
