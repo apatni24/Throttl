@@ -1,0 +1,80 @@
+# Redis with automatic failover: one primary, one replica, three Sentinels.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ha.yml up --build -d
+#   ./scripts/failover-drill.sh
+#
+# Limiters discover the current primary through Sentinel instead of a fixed
+# host. Every node announces its Compose hostname, so addresses survive
+# container restarts and a demoted primary rejoins under its own name.
+
+x-sentinel: &sentinel
+  image: redis:7-alpine
+  command:
+    - sh
+    - -c
+    - |
+      cat > /tmp/sentinel.conf <<EOF
+      port 26379
+      sentinel resolve-hostnames yes
+      sentinel announce-hostnames yes
+      sentinel announce-ip $$(hostname)
+      sentinel monitor throttl redis 6379 2
+      sentinel down-after-milliseconds throttl 3000
+      sentinel failover-timeout throttl 10000
+      sentinel parallel-syncs throttl 1
+      EOF
+      exec redis-sentinel /tmp/sentinel.conf
+  healthcheck:
+    test: ["CMD", "redis-cli", "-p", "26379", "sentinel", "get-master-addr-by-name", "throttl"]
+    interval: 5s
+    timeout: 3s
+    retries: 10
+  depends_on:
+    redis:
+      condition: service_healthy
+    redis-replica:
+      condition: service_healthy
+
+x-limiter-ha: &limiter-ha
+  environment:
+    SPRING_DATA_REDIS_SENTINEL_MASTER: throttl
+    SPRING_DATA_REDIS_SENTINEL_NODES: sentinel-1:26379,sentinel-2:26379,sentinel-3:26379
+  depends_on:
+    sentinel-1:
+      condition: service_healthy
+    sentinel-2:
+      condition: service_healthy
+    sentinel-3:
+      condition: service_healthy
+
+services:
+  redis:
+    hostname: redis
+    command: ["redis-server", "--replica-announce-ip", "redis"]
+
+  redis-replica:
+    image: redis:7-alpine
+    hostname: redis-replica
+    command: ["redis-server", "--replicaof", "redis", "6379", "--replica-announce-ip", "redis-replica"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  sentinel-1:
+    <<: *sentinel
+    hostname: sentinel-1
+  sentinel-2:
+    <<: *sentinel
+    hostname: sentinel-2
+  sentinel-3:
+    <<: *sentinel
+    hostname: sentinel-3
+
+  limiter-1: *limiter-ha
+  limiter-2: *limiter-ha
+  limiter-3: *limiter-ha

@@ -134,6 +134,13 @@ public class RateLimitMetrics {
                 .increment();
     }
 
+    public void incrementRedisFailovers() {
+        Counter.builder("redis_failovers_observed_total")
+                .description("Times Sentinel reported a new primary and Redis connections were rebuilt")
+                .register(registry)
+                .increment();
+    }
+
     public void incrementLeaseUnitsExpired(long units) {
         Counter.builder("rate_limit_lease_units_expired_total")
                 .description("Leased units that expired unspent (bounded under-admission)")

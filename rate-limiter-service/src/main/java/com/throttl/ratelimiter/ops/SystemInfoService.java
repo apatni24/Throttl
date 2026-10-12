@@ -1,7 +1,9 @@
 package com.throttl.ratelimiter.ops;
 
 import com.throttl.ratelimiter.config.RateLimiterProperties;
+import com.throttl.ratelimiter.config.SentinelFailoverWatcher;
 import com.throttl.ratelimiter.engine.RedisCircuitBreaker;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.SpringBootVersion;
 import org.springframework.boot.actuate.health.HealthComponent;
 import org.springframework.boot.actuate.health.HealthEndpoint;
@@ -25,6 +27,7 @@ public class SystemInfoService {
     private final DataSource dataSource;
     private final RedisConnectionFactory redisConnectionFactory;
     private final RedisCircuitBreaker redisCircuitBreaker;
+    private final ObjectProvider<SentinelFailoverWatcher> sentinelWatcher;
     private final RestClient restClient = RestClient.create();
 
     public SystemInfoService(
@@ -32,10 +35,12 @@ public class SystemInfoService {
             HealthEndpoint healthEndpoint,
             DataSource dataSource,
             RedisConnectionFactory redisConnectionFactory,
-            RedisCircuitBreaker redisCircuitBreaker
+            RedisCircuitBreaker redisCircuitBreaker,
+            ObjectProvider<SentinelFailoverWatcher> sentinelWatcher
     ) {
         this.properties = properties;
         this.redisCircuitBreaker = redisCircuitBreaker;
+        this.sentinelWatcher = sentinelWatcher;
         this.healthEndpoint = healthEndpoint;
         this.dataSource = dataSource;
         this.redisConnectionFactory = redisConnectionFactory;
@@ -72,6 +77,9 @@ public class SystemInfoService {
         body.put("redisTimeoutMs", 500);
         body.put("configuredInstances", properties.getInstances().size());
         body.put("redisVersion", redisVersion());
+        body.put("redisTopology", redisTopology());
+        sentinelWatcher.ifAvailable(watcher ->
+                watcher.currentPrimary().ifPresent(primary -> body.put("redisPrimary", primary)));
         body.put("postgresVersion", postgresVersion());
         return body;
     }
@@ -97,6 +105,13 @@ public class SystemInfoService {
             return "unavailable";
         }
         return "unknown";
+    }
+
+    private String redisTopology() {
+        if (sentinelWatcher.getIfAvailable() != null) {
+            return "SENTINEL";
+        }
+        return properties.redisCluster() ? "CLUSTER" : "STANDALONE";
     }
 
     private String postgresVersion() {

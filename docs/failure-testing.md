@@ -24,6 +24,18 @@ docker compose restart redis
 
 While Redis is down, each policy applies its `failureMode` (see below). After Redis returns, buckets start fresh (in-memory Redis has no persistence in this Compose file), so every key can admit a full burst once. Document that outcome rather than assuming tokens survive.
 
+## Redis primary failover (Sentinel)
+
+With `docker-compose.ha.yml`, killing or freezing the primary promotes the replica:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ha.yml up --build -d
+python3 scripts/failover-drill.py --mode kill
+python3 scripts/failover-drill.py --mode pause
+```
+
+Expected: about 5 to 6 seconds of degraded decisions (each policy's failure mode), no HTTP errors, bucket state preserved on the new primary, and the old primary rejoining as a replica. Measured results and caveats: [redis-ha.md](redis-ha.md).
+
 ## PostgreSQL unavailable
 
 ```bash

@@ -31,6 +31,10 @@ export function SystemPage() {
           <Row label="Redis timeout" value={`${info.data?.redisTimeoutMs} ms`} />
           <Row label="Default failure mode" value={info.data?.failClosed ? 'FAIL_CLOSED' : 'FAIL_OPEN'} />
           <Row label="Redis circuit" value={info.data?.redisCircuitOpen ? 'OPEN (degraded)' : 'CLOSED'} />
+          <Row
+            label="Redis topology"
+            value={info.data?.redisPrimary ? `${info.data.redisTopology} (primary ${info.data.redisPrimary})` : info.data?.redisTopology}
+          />
           <Row label="Application" value={`${info.data?.application} ${info.data?.version}`} />
           <Row label="Java" value={info.data?.javaVersion} />
           <Row label="Spring Boot" value={info.data?.springBootVersion} />

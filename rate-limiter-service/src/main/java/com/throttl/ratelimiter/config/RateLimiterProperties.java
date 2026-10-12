@@ -17,6 +17,8 @@ public class RateLimiterProperties {
     private boolean denyCacheEnabled = true;
     /** Upper bound on how long a local denial is trusted. */
     private long denyCacheMaxMs = 1000;
+    /** With Sentinel: how often to ask which node is primary (connections are rebuilt when it changes). */
+    private long sentinelPollMs = 1000;
     private String instanceId = "local";
     private String environment = "LOCAL";
     private List<PeerInstance> instances = new ArrayList<>();
@@ -73,6 +75,14 @@ public class RateLimiterProperties {
 
     public void setDenyCacheMaxMs(long denyCacheMaxMs) {
         this.denyCacheMaxMs = Math.max(0, denyCacheMaxMs);
+    }
+
+    public long sentinelPollMs() {
+        return sentinelPollMs;
+    }
+
+    public void setSentinelPollMs(long sentinelPollMs) {
+        this.sentinelPollMs = Math.max(100, sentinelPollMs);
     }
 
     public String instanceId() {

@@ -51,6 +51,7 @@ throttl:
   redis-breaker-open-ms: ${THROTTL_REDIS_BREAKER_OPEN_MS:1000}
   deny-cache-enabled: ${THROTTL_DENY_CACHE_ENABLED:true}
   deny-cache-max-ms: ${THROTTL_DENY_CACHE_MAX_MS:1000}
+  sentinel-poll-ms: ${THROTTL_SENTINEL_POLL_MS:1000}
   check-io: ${THROTTL_CHECK_IO:sync}
   redis-share-native-connection: ${THROTTL_REDIS_SHARE_NATIVE:false}
   redis-cluster: ${THROTTL_REDIS_CLUSTER:false}

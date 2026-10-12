@@ -29,9 +29,13 @@ Windows are aligned to the epoch and `now` comes from Redis `TIME`. A stored win
 
 The scripts used to receive `System.currentTimeMillis()` from whichever limiter handled the request. Three JVMs do not share a clock. An instance running ahead refills a bucket early and stamps a future `lastRefillTimestamp`; an instance running behind then sees negative elapsed time and refills nothing until its clock catches up. Effective rate depended on which instance nginx picked. The scripts now call `redis.call('TIME')`, so refill math runs against the one clock that owns the state. Calling `TIME` before a write needs script effects replication (Redis 5+; default in 7).
 
-## Why no Redis Cluster in MVP?
+## How does Redis fail over? Why Sentinel, not Cluster?
 
-A single Redis instance already proves shared state across multiple limiter processes. Cluster adds topology and failure modes that do not yet correspond to a measured bottleneck. Add it when one Redis node is the documented limit. The key layout and the cross-slot path below are in place so that move is a deployment change, not a rewrite.
+Availability and capacity are separate problems. `docker-compose.ha.yml` runs a primary, a replica, and three Sentinels; limiters discover the primary through Sentinel. A measured drill shows a primary crash or hang costs about 5 to 6 seconds of degraded decisions (each policy's failure mode), zero HTTP errors, and no bucket state.
+
+The hang case needed code: Lettuce only asks Sentinel on connect, and connections to a frozen primary never break, so limiters stayed on it for 26 s, until it came back. `SentinelFailoverWatcher` polls Sentinel and rebuilds connections when the primary changes, which brought that to 6 s. Async replication can lose the last few milliseconds of bucket writes on failover, which shows up as brief over-admission on those keys; `WAIT` per check or `min-replicas-to-write` with one replica would cost more than it protects. Details, numbers, and options: [redis-ha.md](redis-ha.md).
+
+Cluster solves capacity, and one primary runs this script at ~87k calls/s, far beyond what the stack has needed. The key layout and the cross-slot path below are in place, so moving to Cluster when one primary is the measured limit is a deployment change, not a rewrite.
 
 ## Why `rl:{SCOPE:value}:policyId`?
 

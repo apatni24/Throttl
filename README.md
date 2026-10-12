@@ -33,7 +33,7 @@ In-process rate limiters do not work once traffic is spread across instances. Ea
                     Prometheus → Grafana
 ```
 
-Local Compose runs three limiter instances behind nginx. All three share Redis.
+Local Compose runs three limiter instances behind nginx. All three share Redis. `docker-compose.ha.yml` adds a Redis replica and Sentinel failover.
 
 ## Policy model
 
@@ -232,6 +232,15 @@ curl -s -D - -X POST http://localhost:8090/payments -H 'X-User-Id: u123'
 
 Direct instances for the distributed proof: `http://localhost:8081`, `:8082`, `:8083`.
 
+### Redis with failover
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ha.yml up --build -d
+python3 scripts/failover-drill.py --mode kill    # or --mode pause
+```
+
+Adds a replica and three Sentinels; limiters find the primary through Sentinel and move to a new one within a second of promotion. Measured: a primary crash or hang costs about 5 to 6 seconds of degraded decisions, no HTTP errors, and no bucket state. See [docs/redis-ha.md](docs/redis-ha.md).
+
 ## Tests
 
 ```bash
@@ -267,11 +276,11 @@ Measured results, including the before/after of connection pooling, are in [docs
 
 ## Failure testing
 
-See [docs/failure-testing.md](docs/failure-testing.md). Redis outages fail closed by default (`THROTTL_FAIL_CLOSED=true`).
+See [docs/failure-testing.md](docs/failure-testing.md) and, for Sentinel failover, [docs/redis-ha.md](docs/redis-ha.md). During a Redis outage each policy applies its own `failureMode`; policies without one fail closed by default (`THROTTL_FAIL_CLOSED=true`).
 
 ## Design decisions
 
-See [docs/design-decisions.md](docs/design-decisions.md) for why Redis, Lua, PostgreSQL, token bucket and sliding window, a single Redis node, per-policy failure modes, the Redis clock, the hash-tagged key layout, the deny cache and leases, control-plane auth, and the split between policy data and algorithm code.
+See [docs/design-decisions.md](docs/design-decisions.md) for why Redis, Lua, PostgreSQL, token bucket and sliding window, Sentinel failover rather than Cluster, per-policy failure modes, the Redis clock, the hash-tagged key layout, the deny cache and leases, control-plane auth, and the split between policy data and algorithm code.
 
 ## Spring Boot client
 

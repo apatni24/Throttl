@@ -141,5 +141,7 @@ export type SystemInfo = {
   redisTimeoutMs: number
   configuredInstances: number
   redisVersion: string
+  redisTopology?: 'STANDALONE' | 'SENTINEL' | 'CLUSTER'
+  redisPrimary?: string
   postgresVersion: string
 }
