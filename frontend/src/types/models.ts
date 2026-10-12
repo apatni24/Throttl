@@ -14,9 +14,15 @@ export type SlidingWindowConfiguration = {
   window: RefillPeriod
 }
 
-export type Strategy =
+export type LeaseConfiguration = {
+  tokens: number
+  ttlMs: number
+}
+
+export type Strategy = (
   | { algorithm: 'TOKEN_BUCKET'; configuration: TokenBucketConfiguration }
   | { algorithm: 'SLIDING_WINDOW'; configuration: SlidingWindowConfiguration }
+) & { lease?: LeaseConfiguration | null }
 
 export type Policy = {
   id: string
@@ -48,6 +54,7 @@ export type PolicyEvaluation = {
     | 'ALLOWED'
     | 'REJECTED'
     | 'SKIPPED'
+    | 'LEASED'
     | 'FAILED_OPEN'
     | 'FAILED_CLOSED'
     | 'LOCAL_ALLOWED'

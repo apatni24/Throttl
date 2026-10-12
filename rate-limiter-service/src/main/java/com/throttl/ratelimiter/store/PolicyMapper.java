@@ -1,6 +1,7 @@
 package com.throttl.ratelimiter.store;
 
 import com.throttl.ratelimiter.domain.Algorithm;
+import com.throttl.ratelimiter.domain.LeaseConfiguration;
 import com.throttl.ratelimiter.domain.LimitConfiguration;
 import com.throttl.ratelimiter.domain.LimitingStrategy;
 import com.throttl.ratelimiter.domain.Matching;
@@ -24,7 +25,7 @@ public final class PolicyMapper {
                 entity.getId(),
                 entity.getName(),
                 new Matching(entity.getScope(), entity.getConditions() == null ? Map.of() : entity.getConditions()),
-                new LimitingStrategy(entity.getAlgorithm(), configuration),
+                new LimitingStrategy(entity.getAlgorithm(), configuration, lease(entity)),
                 new PolicyMetadata(entity.isEnabled(), entity.getPriority(), entity.getFailureMode()),
                 entity.getCreatedAt(),
                 entity.getUpdatedAt()
@@ -49,6 +50,16 @@ public final class PolicyMapper {
         entity.setEnabled(policy.metadata().enabled());
         entity.setPriority(policy.metadata().priority());
         entity.setFailureMode(policy.metadata().failureMode());
+        LeaseConfiguration lease = policy.strategy().lease();
+        entity.setLeaseTokens(lease == null ? null : lease.tokens());
+        entity.setLeaseTtlMs(lease == null ? null : Math.toIntExact(lease.ttlMs()));
+    }
+
+    private static LeaseConfiguration lease(PolicyEntity entity) {
+        if (entity.getLeaseTokens() == null || entity.getLeaseTtlMs() == null) {
+            return null;
+        }
+        return new LeaseConfiguration(entity.getLeaseTokens(), entity.getLeaseTtlMs());
     }
 
     public static LimitConfiguration toConfiguration(Algorithm algorithm, Map<String, Object> configuration) {

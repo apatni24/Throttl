@@ -1,7 +1,9 @@
 -- Atomic AND across N buckets of mixed algorithms: consume every key or none.
 -- KEYS[1..n] = bucket keys (must share a hash slot on Redis Cluster)
--- ARGV[1]    = requested units
--- ARGV[2..]  = per key quadruples: algorithm, p1, p2, p3
+-- ARGV[1]    = requested units (the minimum every key must have available)
+-- ARGV[2..]  = per key quintuples: algorithm, want, p1, p2, p3
+--   want >= requested; a key with want > requested is a lease refill and is
+--   granted min(want, available) units instead of exactly `requested`
 --   algorithm 1 = token bucket:   capacity, refillRate, refillPeriodMs
 --   algorithm 2 = sliding window: limit, windowMs, (unused)
 --
@@ -11,11 +13,11 @@
 -- Returns a flat array:
 --   [1] overall allowed (0|1)
 --   [2] 1-based index of first denial, or 0
---   then per key: remaining, retryAfterMs, wouldAllow (0|1)
+--   then per key: remaining, retryAfterMs, wouldAllow (0|1), granted
 
 local TOKEN_BUCKET = 1
 local SLIDING_WINDOW = 2
-local STRIDE = 4
+local STRIDE = 5
 
 local n = #KEYS
 local requested = tonumber(ARGV[1])
@@ -103,9 +105,10 @@ local first_deny = 0
 for i = 1, n do
   local base = 1 + ((i - 1) * STRIDE)
   local algorithm = tonumber(ARGV[base + 1])
-  local p1 = tonumber(ARGV[base + 2])
-  local p2 = tonumber(ARGV[base + 3])
-  local p3 = tonumber(ARGV[base + 4])
+  local want = tonumber(ARGV[base + 2])
+  local p1 = tonumber(ARGV[base + 3])
+  local p2 = tonumber(ARGV[base + 4])
+  local p3 = tonumber(ARGV[base + 5])
 
   local s
   if algorithm == TOKEN_BUCKET then
@@ -116,6 +119,7 @@ for i = 1, n do
     return redis.error_reply('rate_limit unknown algorithm')
   end
   s.algorithm = algorithm
+  s.want = want
   s.p1 = p1
   s.p2 = p2
   s.p3 = p3
@@ -135,7 +139,7 @@ for i = 1, n do
   local s = states[i]
   local take = 0
   if all_allowed == 1 then
-    take = requested
+    take = math.max(requested, math.min(s.want, s.available))
   end
 
   if s.algorithm == TOKEN_BUCKET then
@@ -150,5 +154,6 @@ for i = 1, n do
   result[#result + 1] = s.available - take
   result[#result + 1] = s.retry
   result[#result + 1] = s.would_allow
+  result[#result + 1] = take
 end
 return result

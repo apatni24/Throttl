@@ -43,7 +43,7 @@ A policy has four parts:
 |---|---|
 | Identity | `id`, `name` |
 | Matching | `scope` (`USER`, `TENANT`, `API`, `IP`) and `conditions` |
-| Strategy | `algorithm` + algorithm-specific `configuration` |
+| Strategy | `algorithm` + algorithm-specific `configuration`, optional `lease` |
 | Metadata | `enabled`, `priority`, `failureMode`, timestamps |
 
 Algorithms: **TOKEN_BUCKET** and **SLIDING_WINDOW**. Algorithm-specific fields live inside `strategy.configuration`, not as top-level columns.
@@ -81,6 +81,23 @@ Example:
 ```
 
 Either way, a denial carries `retryAfterMs`: the earliest time the next request would be allowed.
+
+## Hot keys
+
+Most checks on a hot key never reach Redis:
+
+- **Deny cache** (default on, `THROTTL_DENY_CACHE_ENABLED`). After Redis denies a bucket, the instance denies that key locally until `retryAfterMs`, capped at `THROTTL_DENY_CACHE_MAX_MS` (1000). An over-limit client costs Redis about one call per instance per second instead of one per request.
+- **Leases** (opt-in per policy). A leased policy takes up to `tokens` units from Redis in one call and spends them in process for up to `ttlMs`. Redis still counts every unit, so the limit is never exceeded; admissions can shift by up to `ttlMs`, and unused units expire as under-admission.
+
+```json
+"strategy": {
+  "algorithm": "TOKEN_BUCKET",
+  "configuration": { "capacity": 1000, "refillRate": 1000, "refillPeriod": "SECOND" },
+  "lease": { "tokens": 50, "ttlMs": 1000 }
+}
+```
+
+Checks answered locally show up in `rate_limit_local_decisions_total{source}`, and leased policies report status `LEASED` in the check response. Trade-offs: [docs/design-decisions.md](docs/design-decisions.md#does-every-check-need-a-redis-round-trip-hot-keys).
 
 ## Redis and Lua
 
@@ -221,7 +238,7 @@ Direct instances for the distributed proof: `http://localhost:8081`, `:8082`, `:
 ./gradlew test
 ```
 
-Unit tests cover policy validation, matching, refill, consumption, burst, multi-policy AND semantics, and hash-slot co-location of one subject's keys. Integration tests use Testcontainers (PostgreSQL + Redis) for CRUD, admin-token enforcement, token-bucket behavior, all four scopes, per-policy bucket reset, and 1000 concurrent checks against capacity 100. `CrossSlotIntegrationTest` runs the cluster code path: a denial on one slot refunds the other, and 1000 concurrent USER+TENANT checks never overspend and leave every bucket at exactly `capacity - allowed`.
+Unit tests cover policy validation, matching, refill, consumption, burst, multi-policy AND semantics, hash-slot co-location of one subject's keys, the local deny cache, and lease expiry. Integration tests use Testcontainers (PostgreSQL + Redis) for CRUD, admin-token enforcement, token-bucket behavior, all four scopes, per-policy bucket reset, 1000 concurrent checks against capacity 100, deny-cache hits without a Redis call, and leased policies that batch Redis calls without over-admitting under concurrency. `CrossSlotIntegrationTest` runs the cluster code path: a denial on one slot refunds the other, and 1000 concurrent USER+TENANT checks never overspend and leave every bucket at exactly `capacity - allowed`.
 
 MVP acceptance (CRUD, refill, isolation, shared Redis, Prometheus):
 
@@ -240,7 +257,11 @@ k6 run load-test/k6-distributed.js
 k6 run -e RATE=100 -e DURATION=30s load-test/k6-load.js
 k6 run -e RATE=1000 -e DURATION=60s load-test/k6-load.js
 k6 run -e RATE=5000 -e DURATION=30s load-test/k6-load.js
+k6 run -e MODE=deny -e RATE=200 -e LIMIT=10 load-test/k6-hot-key.js
+k6 run -e MODE=lease -e RATE=200 -e LEASE_TOKENS=50 load-test/k6-hot-key.js
 ```
+
+`k6-hot-key.js` sends one subject at one bucket and reports Redis calls per check, scraped from every instance.
 
 Measured results, including the before/after of connection pooling, are in [docs/benchmarks.md](docs/benchmarks.md). `load-test/io-isolation.py` reruns the shared vs pooled vs async comparison on a fresh stack.
 
@@ -250,7 +271,7 @@ See [docs/failure-testing.md](docs/failure-testing.md). Redis outages fail close
 
 ## Design decisions
 
-See [docs/design-decisions.md](docs/design-decisions.md) for why Redis, Lua, PostgreSQL, token bucket, a single Redis node, fail-closed, the Redis clock, the hash-tagged key layout, control-plane auth, and the split between policy data and algorithm code.
+See [docs/design-decisions.md](docs/design-decisions.md) for why Redis, Lua, PostgreSQL, token bucket and sliding window, a single Redis node, per-policy failure modes, the Redis clock, the hash-tagged key layout, the deny cache and leases, control-plane auth, and the split between policy data and algorithm code.
 
 ## Spring Boot client
 

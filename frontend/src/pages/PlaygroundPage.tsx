@@ -104,7 +104,7 @@ function DecisionCard({ decision }: { decision: RateLimitDecision }) {
               <span className="font-mono text-sm">{evaluation.policyId}</span>
               <span className={statusTone(evaluation.status)}>
                 {evaluation.status}
-                {['ALLOWED', 'REJECTED', 'LOCAL_ALLOWED', 'LOCAL_REJECTED'].includes(evaluation.status)
+                {['ALLOWED', 'REJECTED', 'LEASED', 'LOCAL_ALLOWED', 'LOCAL_REJECTED'].includes(evaluation.status)
                   ? ` · ${evaluation.remaining} left`
                   : ''}
               </span>
@@ -118,7 +118,7 @@ function DecisionCard({ decision }: { decision: RateLimitDecision }) {
 
 function statusTone(status: PolicyEvaluation['status']): string {
   if (status === 'REJECTED' || status === 'FAILED_CLOSED' || status === 'LOCAL_REJECTED') return 'text-bad'
-  if (status === 'ALLOWED' || status === 'LOCAL_ALLOWED') return 'text-ok'
+  if (status === 'ALLOWED' || status === 'LOCAL_ALLOWED' || status === 'LEASED') return 'text-ok'
   if (status === 'FAILED_OPEN') return 'text-warn'
   return 'text-mute'
 }

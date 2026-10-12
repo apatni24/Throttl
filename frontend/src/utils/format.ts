@@ -21,17 +21,23 @@ export function validatePolicy(policy: Policy): string[] {
     if (!(cfg.limit > 0)) errors.push('Limit must be greater than 0')
     if (!cfg.window) errors.push('Window is required')
   }
+  const lease = strategy?.lease
+  if (lease) {
+    if (!(lease.tokens >= 2)) errors.push('Lease size must be at least 2')
+    if (!(lease.ttlMs >= 10 && lease.ttlMs <= 60000)) errors.push('Lease TTL must be 10–60000 ms')
+  }
   if (policy.metadata.priority < 0) errors.push('Priority must be 0 or greater')
   return errors
 }
 
 export function configSummary(policy: Policy): string {
   const strategy = policy.strategy
+  const lease = strategy.lease ? ` · lease ${strategy.lease.tokens}/${strategy.lease.ttlMs}ms` : ''
   if (strategy.algorithm === 'SLIDING_WINDOW') {
-    return `${strategy.configuration.limit} per sliding ${strategy.configuration.window.toLowerCase()}`
+    return `${strategy.configuration.limit} per sliding ${strategy.configuration.window.toLowerCase()}${lease}`
   }
   const cfg = strategy.configuration
-  return `${cfg.capacity} cap · ${cfg.refillRate}/${cfg.refillPeriod.toLowerCase()}`
+  return `${cfg.capacity} cap · ${cfg.refillRate}/${cfg.refillPeriod.toLowerCase()}${lease}`
 }
 
 export function conditionsSummary(policy: Policy): string {

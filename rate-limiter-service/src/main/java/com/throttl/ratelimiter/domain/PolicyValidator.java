@@ -73,6 +73,30 @@ public final class PolicyValidator {
                 validateSlidingWindow(slidingWindow);
             }
         }
+        validateLease(strategy.lease(), strategy.configuration());
+    }
+
+    static final int MIN_LEASE_TOKENS = 2;
+    static final long MIN_LEASE_TTL_MS = 10;
+    static final long MAX_LEASE_TTL_MS = 60_000;
+
+    private static void validateLease(LeaseConfiguration lease, LimitConfiguration configuration) {
+        if (lease == null) {
+            return;
+        }
+        if (lease.tokens() < MIN_LEASE_TOKENS) {
+            throw new PolicyValidationException("Lease tokens must be at least " + MIN_LEASE_TOKENS);
+        }
+        if (lease.tokens() > configuration.burstLimit()) {
+            throw new PolicyValidationException("Lease tokens must not exceed the policy limit");
+        }
+        if (lease.ttlMs() < MIN_LEASE_TTL_MS || lease.ttlMs() > MAX_LEASE_TTL_MS) {
+            throw new PolicyValidationException(
+                    "Lease ttlMs must be between " + MIN_LEASE_TTL_MS + " and " + MAX_LEASE_TTL_MS);
+        }
+        if (configuration instanceof SlidingWindowConfiguration window && lease.ttlMs() > window.windowMillis()) {
+            throw new PolicyValidationException("Lease ttlMs must not exceed the sliding window");
+        }
     }
 
     private static void requireAlgorithm(LimitingStrategy strategy, Algorithm expected) {

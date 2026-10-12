@@ -30,7 +30,8 @@ public record PolicyResponse(
                 new MatchingRequest(policy.matching().scope(), policy.matching().conditions()),
                 new StrategyRequest(
                         policy.strategy().algorithm(),
-                        PolicyMapper.fromConfiguration(policy.strategy().configuration())
+                        PolicyMapper.fromConfiguration(policy.strategy().configuration()),
+                        policy.strategy().lease()
                 ),
                 new MetadataResponse(
                         policy.metadata().enabled(),

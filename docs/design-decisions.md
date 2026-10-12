@@ -68,6 +68,31 @@ Two supporting changes make the modes actually reachable:
 - **The policy catalog does not need Redis.** Every check reads the `policy:generation` counter from Redis before trusting the Caffeine cache. That read used to throw first during an outage, so the global fallback always won and no per-policy mode ran. Now a failed generation read serves the cached policies (until their TTL) and lets each policy decide. If the cache is also cold and PostgreSQL is down, no per-policy mode is known and the service default applies (`rejectedBy: policy-catalog-unavailable` when failing closed).
 - **A circuit breaker stops every check from paying the timeout.** Without it, each degraded check waited for the 500ms Redis timeout, twice (generation read, then script). After a failure, Redis calls are skipped for `THROTTL_REDIS_BREAKER_OPEN_MS` (1000ms), then exactly one probe goes through; success closes the breaker. `FailureModeIntegrationTest` freezes a real Redis with `docker pause` (open sockets, no replies: what a hung node or a partition looks like) and checks that each mode decides, that degraded checks average well under the timeout, and that decisions come from Redis again after it resumes. The breaker is a small class rather than Resilience4j because it needs exactly one behavior, and the probe semantics are easier to test with an injected clock.
 
+## Does every check need a Redis round trip? (hot keys)
+
+No. A check now goes through up to three steps, cheapest first, and only the last one touches Redis:
+
+1. **Local deny cache** (on by default). When Redis denies a bucket, the instance remembers that key until `retryAfterMs`, capped at `THROTTL_DENY_CACHE_MAX_MS` (1000). Later checks on that key are denied in process. This is safe because `retryAfterMs` is the earliest moment the bucket could allow if nobody else consumed. Other consumers only push that moment later, so a cached denial never denies something Redis would have allowed. The cap bounds the error from the cases that break that assumption (a cross-slot refund returning a unit early, an operator editing Redis by hand). A policy change clears the cache on every instance as soon as it sees the new `policy:generation`.
+2. **Leases** (opt-in per policy, `strategy.lease: { tokens, ttlMs }`). When a leased policy goes to Redis, the script grants up to `tokens` units instead of one, consuming all of them in Redis. The instance spends the extra units locally until `ttlMs`. Units left over at expiry are dropped, never returned, and counted in `rate_limit_lease_units_expired_total`.
+3. **Redis**, one atomic script for every remaining policy. A lease refill rides along in the same call as the other policies, so all-or-nothing still holds.
+
+What this buys, for one subject hammering one bucket:
+
+- **Abusive traffic costs Redis almost nothing.** With the deny cache, a key that is over its limit costs at most about one Redis call per instance per `retryAfter` (≤ 1 s), plus one per admitted request. Redis load tracks the admitted rate and the number of instances, not the offered rate.
+- **Legitimate high-rate traffic costs Redis 1/N.** With a lease of N, a hot key that is under its limit costs about one Redis call per N admitted requests per instance. `rate_limit_local_decisions_total{source=deny_cache|lease}` shows how many checks never left the process.
+
+Leases trade some precision for that, and the trade is explicit:
+
+- **Redis never over-counts.** Every leased unit is consumed in Redis before any instance spends it, so total admissions never exceed what the bucket allowed. A lease can never make a 100/min limit admit 101 in a minute's worth of Redis accounting.
+- **Admissions can shift in time by up to `ttlMs`.** A unit taken at the end of one window can be spent at the start of the next. With I instances, up to N × I prepaid units can be spent in a short burst. That is why the validator requires `tokens ≤` the policy limit, `ttlMs` ≤ 60 s, and for a sliding window `ttlMs ≤ window`, which keeps the shift inside one window.
+- **Unused units are under-admission.** A lease that expires half spent, or is cleared by a policy change, denies traffic Redis would have allowed. Errors from leases always point toward denying more, never admitting more.
+- **All-or-nothing still holds locally.** If a leased unit is taken but another policy on the same request denies, the unit goes back into the local lease, not to Redis.
+- **During a Redis outage, leased units still spend.** They were already paid for. The remaining policies fall back to their failure modes.
+
+Leases are opt-in because that time shift is wrong for some limits ("3 login attempts per minute" should not be prepaid in batches of 3). They suit high-volume API quotas, where one Redis call per request is the actual cost.
+
+**The other hop.** The service → limiter call remains. That is the price of a central limiter shared by many languages and services, and the deny cache and leases make it the only hop for most hot-key checks. Removing it means embedding the limiter in each service. The Spring Boot client is the natural place to add an in-process lease later, which would leave Redis as the only remote dependency.
+
 ## Why authenticate the control plane separately?
 
 `/v1/check` is a data-plane call: every protected service makes it on every request, and it can only consume tokens. Policy writes change who is limited and how hard. An unauthenticated `PUT` could set capacity to a billion, or a `DELETE` could remove the limit in front of payments. Those are different trust boundaries, so writes require `Authorization: Bearer $THROTTL_ADMIN_TOKEN` and the check path stays open.

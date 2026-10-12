@@ -33,6 +33,7 @@ public class PolicyCatalog {
     private final Cache<String, List<Policy>> cache;
     private final AtomicLong localGeneration = new AtomicLong(Long.MIN_VALUE);
     private final RedisCircuitBreaker breaker;
+    private final List<Runnable> changeListeners = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     public PolicyCatalog(
             PolicyStore policyStore,
@@ -72,14 +73,11 @@ public class PolicyCatalog {
                         })
                 : Mono.just(localGeneration.get());
         return generation.flatMap(remote -> {
-            if (localGeneration.get() != remote) {
-                cache.invalidateAll();
-                localGeneration.set(remote);
-            }
+            observeGeneration(remote);
             List<Policy> cached = cache.getIfPresent(ENABLED_KEY);
             if (cached != null) {
                 metrics.incrementCacheHits();
-                log.info("Policy cache HIT");
+                log.debug("Policy cache HIT");
                 return Mono.just(cached);
             }
             return Mono.fromCallable(() -> loadFromStore())
@@ -87,15 +85,25 @@ public class PolicyCatalog {
         });
     }
 
-    private List<Policy> applyGeneration(long remote) {
-        if (localGeneration.get() != remote) {
+    /** Runs whenever this instance learns that policies changed (any instance's write). */
+    public void addChangeListener(Runnable listener) {
+        changeListeners.add(listener);
+    }
+
+    private void observeGeneration(long remote) {
+        long previous = localGeneration.getAndSet(remote);
+        if (previous != remote) {
             cache.invalidateAll();
-            localGeneration.set(remote);
+            changeListeners.forEach(Runnable::run);
         }
+    }
+
+    private List<Policy> applyGeneration(long remote) {
+        observeGeneration(remote);
         List<Policy> cached = cache.getIfPresent(ENABLED_KEY);
         if (cached != null) {
             metrics.incrementCacheHits();
-            log.info("Policy cache HIT");
+            log.debug("Policy cache HIT");
             return cached;
         }
         return loadFromStore();
@@ -112,7 +120,7 @@ public class PolicyCatalog {
     public void invalidate() {
         redisTemplate.opsForValue().increment(GENERATION_KEY);
         cache.invalidateAll();
-        localGeneration.set(currentGeneration());
+        observeGeneration(currentGeneration());
     }
 
     private long generationOrLastKnown() {

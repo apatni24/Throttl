@@ -49,7 +49,11 @@ public final class PolicyAssembler {
                     request.id(),
                     request.name(),
                     new Matching(request.matching().scope(), cleanedConditions(request.matching().conditions())),
-                    new LimitingStrategy(algorithm, PolicyMapper.toConfiguration(algorithm, configuration)),
+                    new LimitingStrategy(
+                            algorithm,
+                            PolicyMapper.toConfiguration(algorithm, configuration),
+                            request.strategy().lease()
+                    ),
                     new PolicyMetadata(enabled, priority, failureMode),
                     null,
                     null

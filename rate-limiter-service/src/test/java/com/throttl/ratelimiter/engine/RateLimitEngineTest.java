@@ -1,5 +1,6 @@
 package com.throttl.ratelimiter.engine;
 
+import com.github.benmanes.caffeine.cache.Ticker;
 import com.throttl.ratelimiter.api.dto.RateLimitCheckRequest;
 import com.throttl.ratelimiter.config.RateLimiterProperties;
 import com.throttl.ratelimiter.domain.Algorithm;
@@ -34,11 +35,14 @@ class RateLimitEngineTest {
     private final RateLimiterProperties properties = new RateLimiterProperties();
 
     private RateLimitEngine engine() {
+        RateLimitMetrics metrics = new RateLimitMetrics(new SimpleMeterRegistry());
         return new RateLimitEngine(
                 catalog,
                 redis,
                 new LocalFallbackLimiter(3, () -> 1_000_000L),
-                new RateLimitMetrics(new SimpleMeterRegistry()),
+                new LocalDenyCache(true, 1_000, Ticker.systemTicker()),
+                new LeaseStore(Ticker.systemTicker(), metrics),
+                metrics,
                 properties
         );
     }
@@ -46,8 +50,8 @@ class RateLimitEngineTest {
     private void redisDown(Policy... policies) {
         when(catalog.enabledPolicies()).thenReturn(List.of(policies));
         when(catalog.enabledPoliciesAsync()).thenReturn(Mono.just(List.of(policies)));
-        when(redis.evaluateAll(any(), any())).thenThrow(new RuntimeException("Redis down"));
-        when(redis.evaluateAllReactive(any(), any())).thenReturn(Mono.error(new RuntimeException("Redis down")));
+        when(redis.evaluateAll(any(), any(), any())).thenThrow(new RuntimeException("Redis down"));
+        when(redis.evaluateAllReactive(any(), any(), any())).thenReturn(Mono.error(new RuntimeException("Redis down")));
     }
 
     @Test

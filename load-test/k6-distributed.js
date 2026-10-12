@@ -55,6 +55,10 @@ export default function (data) {
   }
 }
 
+export function teardown() {
+  http.del(`${INSTANCES[0]}/v1/policies/distributed-user-limit`, null, { headers: ADMIN_HEADERS });
+}
+
 export function handleSummary(data) {
   const a = (data.metrics.allowed_decisions && data.metrics.allowed_decisions.values.count) || 0;
   const d = (data.metrics.denied_decisions && data.metrics.denied_decisions.values.count) || 0;

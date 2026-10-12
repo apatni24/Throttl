@@ -13,6 +13,10 @@ public class RateLimiterProperties {
     private boolean failClosed = true;
     /** How long Redis calls are skipped after a failure before one probe is let through. */
     private long redisBreakerOpenMs = 1000;
+    /** Answer checks for a just-denied bucket locally until its retryAfter. */
+    private boolean denyCacheEnabled = true;
+    /** Upper bound on how long a local denial is trusted. */
+    private long denyCacheMaxMs = 1000;
     private String instanceId = "local";
     private String environment = "LOCAL";
     private List<PeerInstance> instances = new ArrayList<>();
@@ -53,6 +57,22 @@ public class RateLimiterProperties {
 
     public void setRedisBreakerOpenMs(long redisBreakerOpenMs) {
         this.redisBreakerOpenMs = Math.max(0, redisBreakerOpenMs);
+    }
+
+    public boolean denyCacheEnabled() {
+        return denyCacheEnabled;
+    }
+
+    public void setDenyCacheEnabled(boolean denyCacheEnabled) {
+        this.denyCacheEnabled = denyCacheEnabled;
+    }
+
+    public long denyCacheMaxMs() {
+        return denyCacheMaxMs;
+    }
+
+    public void setDenyCacheMaxMs(long denyCacheMaxMs) {
+        this.denyCacheMaxMs = Math.max(0, denyCacheMaxMs);
     }
 
     public String instanceId() {

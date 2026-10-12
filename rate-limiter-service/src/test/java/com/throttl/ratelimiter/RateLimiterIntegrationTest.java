@@ -1,9 +1,11 @@
 package com.throttl.ratelimiter;
 
 import com.throttl.ratelimiter.api.dto.RateLimitCheckRequest;
+import com.throttl.ratelimiter.engine.LeaseStore;
 import com.throttl.ratelimiter.engine.PolicyCatalog;
 import com.throttl.ratelimiter.engine.RateLimitDecision;
 import com.throttl.ratelimiter.engine.RateLimitEngine;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
@@ -97,6 +99,12 @@ class RateLimiterIntegrationTest {
 
     @Autowired
     private StringRedisTemplate redisTemplate;
+
+    @Autowired
+    private LeaseStore leaseStore;
+
+    @Autowired
+    private MeterRegistry meterRegistry;
 
     @BeforeEach
     void resetState() {
@@ -383,6 +391,140 @@ class RateLimiterIntegrationTest {
         HttpResponse<String> response = rawPost("/v1/policies", body, ADMIN_TOKEN);
         assertThat(response.statusCode()).isEqualTo(400);
         assertThat(response.body()).contains("limit");
+    }
+
+    @Test
+    void overLimitChecksAreDeniedLocallyWithoutRedis() {
+        createPolicy("payment-user-limit", "USER", 5, 1, "HOUR", "payment");
+        RateLimitCheckRequest request = new RateLimitCheckRequest("u-hot", "acme", "payment", null);
+        for (int i = 0; i < 6; i++) {
+            engine.check(request);
+        }
+
+        long redisCallsBefore = redisCalls();
+        RateLimitDecision denied = null;
+        for (int i = 0; i < 100; i++) {
+            denied = engine.check(request);
+            assertThat(denied.allowed()).isFalse();
+        }
+
+        assertThat(redisCalls() - redisCallsBefore).as("denials answered from the local deny cache").isZero();
+        assertThat(denied.rejectedBy()).isEqualTo("payment-user-limit");
+        assertThat(denied.retryAfterMs()).isBetween(1L, 1_000L);
+        assertThat(redisTemplate.opsForHash().get("rl:{USER:u-hot}:payment-user-limit", "tokens")).isEqualTo("0");
+    }
+
+    @Test
+    void policyChangeClearsLocalDenials() {
+        createPolicy("payment-user-limit", "USER", 1, 1, "HOUR", "payment");
+        RateLimitCheckRequest request = new RateLimitCheckRequest("u-reset-deny", "acme", "payment", null);
+        engine.check(request);
+        assertThat(engine.check(request).allowed()).isFalse();
+
+        restTemplate.put("/v1/policies/payment-user-limit",
+                json(policyJson("payment-user-limit", "USER", 10, 1, "HOUR", "payment")));
+
+        assertThat(engine.check(request).allowed()).isTrue();
+    }
+
+    @Test
+    void leasedPolicyBatchesRedisCalls() {
+        createLeasedPolicy("feed-user-limit", 100, 10, 60_000);
+        RateLimitCheckRequest request = new RateLimitCheckRequest("u-lease", "acme", "feed", null);
+
+        long before = redisCalls();
+        for (int i = 0; i < 25; i++) {
+            RateLimitDecision decision = engine.check(request);
+            assertThat(decision.allowed()).isTrue();
+        }
+
+        assertThat(redisCalls() - before).as("one refill per 10 checks").isEqualTo(3);
+        assertThat(redisTemplate.opsForHash().get("rl:{USER:u-lease}:feed-user-limit", "tokens"))
+                .as("Redis counts every leased unit up front")
+                .isEqualTo("70");
+    }
+
+    @Test
+    void concurrentLeasedChecksNeverOverAdmit() throws Exception {
+        createLeasedPolicy("feed-user-limit", 100, 10, 60_000);
+        RateLimitCheckRequest request = new RateLimitCheckRequest("u-lease-race", "acme", "feed", null);
+
+        AtomicInteger allowed = new AtomicInteger();
+        List<Callable<Void>> tasks = new ArrayList<>();
+        for (int i = 0; i < 1000; i++) {
+            tasks.add(() -> {
+                if (engine.check(request).allowed()) {
+                    allowed.incrementAndGet();
+                }
+                return null;
+            });
+        }
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            for (Future<Void> future : executor.invokeAll(tasks)) {
+                future.get(30, TimeUnit.SECONDS);
+            }
+        }
+
+        assertThat(allowed.get()).isLessThanOrEqualTo(100);
+        assertThat(redisTemplate.opsForHash().get("rl:{USER:u-lease-race}:feed-user-limit", "tokens")).isEqualTo("0");
+        assertThat(allowed.get() + leaseStore.remaining("rl:{USER:u-lease-race}:feed-user-limit"))
+                .as("every unit Redis granted was admitted once or is still held by the lease")
+                .isEqualTo(100);
+    }
+
+    @Test
+    void leasedUnitIsReturnedWhenAnotherPolicyDenies() {
+        createLeasedPolicy("feed-user-limit", 100, 10, 60_000);
+        createPolicy("feed-tenant-limit", "TENANT", 3, 1, "HOUR", "feed");
+        RateLimitCheckRequest request = new RateLimitCheckRequest("u-lease-and", "acme", "feed", null);
+
+        long allowed = java.util.stream.IntStream.range(0, 6).filter(i -> engine.check(request).allowed()).count();
+
+        assertThat(allowed).isEqualTo(3);
+        assertThat(leaseStore.remaining("rl:{USER:u-lease-and}:feed-user-limit"))
+                .as("10 granted, 3 spent; units used by denied checks were given back")
+                .isEqualTo(7);
+    }
+
+    @Test
+    void leaseIsValidatedAndRoundTrips() throws Exception {
+        createLeasedPolicy("feed-user-limit", 100, 10, 500);
+        Map<?, ?> strategy = (Map<?, ?>) restTemplate.getForEntity("/v1/policies/feed-user-limit", Map.class)
+                .getBody().get("strategy");
+        Map<?, ?> lease = (Map<?, ?>) strategy.get("lease");
+        assertThat(lease.get("tokens")).isEqualTo(10);
+        assertThat(lease.get("ttlMs")).isEqualTo(500);
+
+        String tooBig = leasedPolicyJson("feed-big-lease", 5, 10, 500);
+        HttpResponse<String> rejected = rawPost("/v1/policies", tooBig, ADMIN_TOKEN);
+        assertThat(rejected.statusCode()).isEqualTo(400);
+        assertThat(rejected.body()).contains("Lease tokens");
+    }
+
+    private long redisCalls() {
+        return (long) meterRegistry.get("redis_operation_latency_seconds").timer().count();
+    }
+
+    private void createLeasedPolicy(String id, long capacity, int leaseTokens, long ttlMs) {
+        ResponseEntity<Map> created = restTemplate.postForEntity(
+                "/v1/policies", json(leasedPolicyJson(id, capacity, leaseTokens, ttlMs)), Map.class);
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+    }
+
+    private static String leasedPolicyJson(String id, long capacity, int leaseTokens, long ttlMs) {
+        return """
+                {
+                  "id": "%s",
+                  "name": "%s",
+                  "matching": { "scope": "USER", "conditions": { "api": "feed" } },
+                  "strategy": {
+                    "algorithm": "TOKEN_BUCKET",
+                    "configuration": { "capacity": %d, "refillRate": 1, "refillPeriod": "HOUR" },
+                    "lease": { "tokens": %d, "ttlMs": %d }
+                  },
+                  "metadata": { "enabled": true, "priority": 20 }
+                }
+                """.formatted(id, id, capacity, leaseTokens, ttlMs);
     }
 
     private void createSlidingWindowPolicy(String id, String scope, long limit, String window, String api) {

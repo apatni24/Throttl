@@ -68,10 +68,6 @@ public class RedisRateLimiter {
         this.refundScript.setResultType(Long.class);
     }
 
-    public RateLimitDecision evaluate(Policy policy, String bucketKey) {
-        return evaluateAll(List.of(policy), List.of(bucketKey)).getFirst();
-    }
-
     /**
      * Evaluates every matching bucket. Units are taken from all buckets only if
      * every bucket would allow; otherwise none stay taken.
@@ -80,9 +76,12 @@ public class RedisRateLimiter {
      * Redis Cluster: one atomic script per hash slot. If any slot group denies,
      * groups that already consumed are refunded. Between consume and refund a
      * concurrent check can be denied early; capacity is never overspent.
+     *
+     * @param wants units to take per bucket if everything allows: 1 for a
+     *              plain check, the lease size for a lease refill
      */
-    public List<RateLimitDecision> evaluateAll(List<Policy> policies, List<String> bucketKeys) {
-        if (policies.size() != bucketKeys.size()) {
+    public List<BucketOutcome> evaluateAll(List<Policy> policies, List<String> bucketKeys, List<Long> wants) {
+        if (policies.size() != bucketKeys.size() || policies.size() != wants.size()) {
             throw new IllegalArgumentException("Policies and bucket keys must align");
         }
         if (policies.isEmpty()) {
@@ -95,11 +94,11 @@ public class RedisRateLimiter {
         List<List<Integer>> groups = slotGroups(bucketKeys);
         Timer.Sample sample = Timer.start();
         try {
-            List<RateLimitDecision> decisions = groups.size() == 1
-                    ? evaluateGroup(policies, bucketKeys, groups.getFirst())
-                    : evaluateAcrossSlots(policies, bucketKeys, groups);
+            List<BucketOutcome> outcomes = groups.size() == 1
+                    ? evaluateGroup(policies, bucketKeys, wants, groups.getFirst())
+                    : evaluateAcrossSlots(policies, bucketKeys, wants, groups);
             breaker.onSuccess();
-            return decisions;
+            return outcomes;
         } catch (RuntimeException ex) {
             metrics.incrementRedisErrors();
             breaker.onFailure(ex);
@@ -109,8 +108,12 @@ public class RedisRateLimiter {
         }
     }
 
-    public Mono<List<RateLimitDecision>> evaluateAllReactive(List<Policy> policies, List<String> bucketKeys) {
-        if (policies.size() != bucketKeys.size()) {
+    public Mono<List<BucketOutcome>> evaluateAllReactive(
+            List<Policy> policies,
+            List<String> bucketKeys,
+            List<Long> wants
+    ) {
+        if (policies.size() != bucketKeys.size() || policies.size() != wants.size()) {
             return Mono.error(new IllegalArgumentException("Policies and bucket keys must align"));
         }
         if (policies.isEmpty()) {
@@ -122,11 +125,11 @@ public class RedisRateLimiter {
         }
         List<List<Integer>> groups = slotGroups(bucketKeys);
         Timer.Sample sample = Timer.start();
-        Mono<List<RateLimitDecision>> result = groups.size() == 1
-                ? evaluateGroupReactive(policies, bucketKeys, groups.getFirst())
-                : evaluateAcrossSlotsReactive(policies, bucketKeys, groups);
+        Mono<List<BucketOutcome>> result = groups.size() == 1
+                ? evaluateGroupReactive(policies, bucketKeys, wants, groups.getFirst())
+                : evaluateAcrossSlotsReactive(policies, bucketKeys, wants, groups);
         return result
-                .doOnSuccess(decisions -> breaker.onSuccess())
+                .doOnSuccess(outcomes -> breaker.onSuccess())
                 .doOnError(error -> {
                     metrics.incrementRedisErrors();
                     breaker.onFailure(error);
@@ -146,89 +149,103 @@ public class RedisRateLimiter {
     }
 
     @SuppressWarnings("unchecked")
-    private List<RateLimitDecision> evaluateGroup(List<Policy> policies, List<String> bucketKeys, List<Integer> group) {
-        List<Policy> groupPolicies = pick(policies, group);
-        List<String> args = scriptArgs(groupPolicies);
-        List<Object> result = (List<Object>) redisTemplate.execute(
-                script, pick(bucketKeys, group), (Object[]) args.toArray(new String[0]));
-        return parse(groupPolicies, result);
-    }
-
-    private Mono<List<RateLimitDecision>> evaluateGroupReactive(
+    private List<BucketOutcome> evaluateGroup(
             List<Policy> policies,
             List<String> bucketKeys,
+            List<Long> wants,
             List<Integer> group
     ) {
         List<Policy> groupPolicies = pick(policies, group);
-        return reactiveRedisTemplate.execute(script, pick(bucketKeys, group), scriptArgs(groupPolicies))
+        List<String> args = scriptArgs(groupPolicies, pick(wants, group));
+        List<Object> result = (List<Object>) redisTemplate.execute(
+                script, pick(bucketKeys, group), (Object[]) args.toArray(new String[0]));
+        return parse(groupPolicies.size(), result);
+    }
+
+    private Mono<List<BucketOutcome>> evaluateGroupReactive(
+            List<Policy> policies,
+            List<String> bucketKeys,
+            List<Long> wants,
+            List<Integer> group
+    ) {
+        List<Policy> groupPolicies = pick(policies, group);
+        return reactiveRedisTemplate.execute(script, pick(bucketKeys, group), scriptArgs(groupPolicies, pick(wants, group)))
                 .collectList()
                 .map(RedisRateLimiter::flattenScriptEmission)
-                .map(result -> parse(groupPolicies, result));
+                .map(result -> parse(groupPolicies.size(), result));
     }
 
     /**
      * Runs on one bound connection so the refund never has to borrow from a
      * pool that concurrent checks have exhausted.
      */
-    private List<RateLimitDecision> evaluateAcrossSlots(
+    private List<BucketOutcome> evaluateAcrossSlots(
             List<Policy> policies,
             List<String> bucketKeys,
+            List<Long> wants,
             List<List<Integer>> groups
     ) {
         return redisTemplate.execute(new SessionCallback<>() {
             @Override
-            public <K, V> List<RateLimitDecision> execute(RedisOperations<K, V> operations) {
-                return evaluateAcrossSlotsOnBoundConnection(policies, bucketKeys, groups);
+            public <K, V> List<BucketOutcome> execute(RedisOperations<K, V> operations) {
+                return evaluateAcrossSlotsOnBoundConnection(policies, bucketKeys, wants, groups);
             }
         });
     }
 
-    private List<RateLimitDecision> evaluateAcrossSlotsOnBoundConnection(
+    private List<BucketOutcome> evaluateAcrossSlotsOnBoundConnection(
             List<Policy> policies,
             List<String> bucketKeys,
+            List<Long> wants,
             List<List<Integer>> groups
     ) {
-        RateLimitDecision[] decisions = new RateLimitDecision[policies.size()];
+        BucketOutcome[] outcomes = new BucketOutcome[policies.size()];
         List<List<Integer>> consumed = new ArrayList<>();
         try {
             for (List<Integer> group : groups) {
-                List<RateLimitDecision> groupDecisions = evaluateGroup(policies, bucketKeys, group);
-                place(decisions, group, groupDecisions);
-                if (allAllowed(groupDecisions)) {
+                List<BucketOutcome> groupOutcomes = evaluateGroup(policies, bucketKeys, wants, group);
+                place(outcomes, group, groupOutcomes);
+                if (allAllowed(groupOutcomes)) {
                     consumed.add(group);
                 }
             }
         } catch (RuntimeException ex) {
-            refund(policies, bucketKeys, consumed);
+            refund(policies, bucketKeys, outcomes, consumed);
             throw ex;
         }
         if (consumed.size() == groups.size()) {
-            return List.of(decisions);
+            return List.of(outcomes);
         }
-        refund(policies, bucketKeys, consumed);
-        return afterRefund(policies, decisions, consumed);
+        refund(policies, bucketKeys, outcomes, consumed);
+        return afterRefund(policies, outcomes, consumed);
     }
 
     /**
      * Reactive connections cannot be pinned across commands, so the cross-slot
      * case reuses the bound-connection path on boundedElastic.
      */
-    private Mono<List<RateLimitDecision>> evaluateAcrossSlotsReactive(
+    private Mono<List<BucketOutcome>> evaluateAcrossSlotsReactive(
             List<Policy> policies,
             List<String> bucketKeys,
+            List<Long> wants,
             List<List<Integer>> groups
     ) {
-        return Mono.fromCallable(() -> evaluateAcrossSlots(policies, bucketKeys, groups))
+        return Mono.fromCallable(() -> evaluateAcrossSlots(policies, bucketKeys, wants, groups))
                 .subscribeOn(Schedulers.boundedElastic());
     }
 
-    private void refund(List<Policy> policies, List<String> bucketKeys, List<List<Integer>> groups) {
+    private void refund(
+            List<Policy> policies,
+            List<String> bucketKeys,
+            BucketOutcome[] outcomes,
+            List<List<Integer>> groups
+    ) {
         for (List<Integer> group : groups) {
             try {
                 redisTemplate.execute(
                         refundScript,
                         pick(bucketKeys, group),
-                        (Object[]) refundArgs(pick(policies, group)).toArray(new String[0])
+                        (Object[]) refundArgs(policies, outcomes, group).toArray(new String[0])
                 );
                 metrics.incrementCrossSlotRefunds();
             } catch (RuntimeException ex) {
@@ -238,29 +255,30 @@ public class RedisRateLimiter {
         }
     }
 
-    private static List<RateLimitDecision> afterRefund(
+    private static List<BucketOutcome> afterRefund(
             List<Policy> policies,
-            RateLimitDecision[] decisions,
+            BucketOutcome[] outcomes,
             List<List<Integer>> refunded
     ) {
-        RateLimitDecision[] adjusted = decisions.clone();
+        BucketOutcome[] adjusted = outcomes.clone();
         for (List<Integer> group : refunded) {
             for (int index : group) {
                 long limit = policies.get(index).strategy().configuration().burstLimit();
-                adjusted[index] = RateLimitDecision.allow(Math.min(limit, decisions[index].remaining() + REQUESTED));
+                BucketOutcome spent = outcomes[index];
+                adjusted[index] = new BucketOutcome(true, Math.min(limit, spent.remaining() + spent.granted()), 0, 0);
             }
         }
         return List.of(adjusted);
     }
 
-    private static void place(RateLimitDecision[] decisions, List<Integer> group, List<RateLimitDecision> groupDecisions) {
+    private static void place(BucketOutcome[] outcomes, List<Integer> group, List<BucketOutcome> groupOutcomes) {
         for (int i = 0; i < group.size(); i++) {
-            decisions[group.get(i)] = groupDecisions.get(i);
+            outcomes[group.get(i)] = groupOutcomes.get(i);
         }
     }
 
-    private static boolean allAllowed(List<RateLimitDecision> decisions) {
-        return decisions.stream().allMatch(RateLimitDecision::allowed);
+    private static boolean allAllowed(List<BucketOutcome> outcomes) {
+        return outcomes.stream().allMatch(BucketOutcome::allowed);
     }
 
     private static <T> List<T> pick(List<T> items, List<Integer> indices) {
@@ -278,19 +296,23 @@ public class RedisRateLimiter {
         return (List<Object>) emitted;
     }
 
-    private static List<String> scriptArgs(List<Policy> policies) {
-        List<String> args = new ArrayList<>(1 + policies.size() * 4);
+    private static List<String> scriptArgs(List<Policy> policies, List<Long> wants) {
+        List<String> args = new ArrayList<>(1 + policies.size() * 5);
         args.add(String.valueOf(REQUESTED));
-        for (Policy policy : policies) {
+        for (int i = 0; i < policies.size(); i++) {
+            Policy policy = policies.get(i);
+            String want = String.valueOf(Math.max(REQUESTED, wants.get(i)));
             switch (policy.strategy().configuration()) {
                 case TokenBucketConfiguration tokenBucket -> {
                     args.add(TOKEN_BUCKET);
+                    args.add(want);
                     args.add(String.valueOf(tokenBucket.capacity()));
                     args.add(String.valueOf(tokenBucket.refillRate()));
                     args.add(String.valueOf(tokenBucket.refillPeriodMillis()));
                 }
                 case SlidingWindowConfiguration slidingWindow -> {
                     args.add(SLIDING_WINDOW);
+                    args.add(want);
                     args.add(String.valueOf(slidingWindow.limit()));
                     args.add(String.valueOf(slidingWindow.windowMillis()));
                     args.add("0");
@@ -300,32 +322,32 @@ public class RedisRateLimiter {
         return args;
     }
 
-    private static List<String> refundArgs(List<Policy> policies) {
-        List<String> args = new ArrayList<>(policies.size() * 3);
-        for (Policy policy : policies) {
-            LimitConfiguration configuration = policy.strategy().configuration();
+    private static List<String> refundArgs(List<Policy> policies, BucketOutcome[] outcomes, List<Integer> group) {
+        List<String> args = new ArrayList<>(group.size() * 3);
+        for (int index : group) {
+            LimitConfiguration configuration = policies.get(index).strategy().configuration();
             args.add(configuration instanceof SlidingWindowConfiguration ? SLIDING_WINDOW : TOKEN_BUCKET);
-            args.add(String.valueOf(REQUESTED));
+            args.add(String.valueOf(outcomes[index].granted()));
             args.add(String.valueOf(configuration.burstLimit()));
         }
         return args;
     }
 
-    private static List<RateLimitDecision> parse(List<Policy> policies, List<Object> result) {
-        if (result == null || result.size() != 2 + policies.size() * 3) {
+    private static List<BucketOutcome> parse(int keys, List<Object> result) {
+        if (result == null || result.size() != 2 + keys * 4) {
             throw new IllegalStateException("Unexpected rate_limit.lua result");
         }
-        List<RateLimitDecision> decisions = new ArrayList<>(policies.size());
-        for (int i = 0; i < policies.size(); i++) {
-            int offset = 2 + (i * 3);
-            long remaining = asLong(result.get(offset));
-            long retryAfterMs = asLong(result.get(offset + 1));
-            boolean wouldAllow = asLong(result.get(offset + 2)) == 1L;
-            decisions.add(wouldAllow
-                    ? RateLimitDecision.allow(remaining)
-                    : RateLimitDecision.deny(remaining, retryAfterMs, policies.get(i).id()));
+        List<BucketOutcome> outcomes = new ArrayList<>(keys);
+        for (int i = 0; i < keys; i++) {
+            int offset = 2 + (i * 4);
+            outcomes.add(new BucketOutcome(
+                    asLong(result.get(offset + 2)) == 1L,
+                    asLong(result.get(offset)),
+                    asLong(result.get(offset + 1)),
+                    asLong(result.get(offset + 3))
+            ));
         }
-        return List.copyOf(decisions);
+        return List.copyOf(outcomes);
     }
 
     private static long asLong(Object value) {

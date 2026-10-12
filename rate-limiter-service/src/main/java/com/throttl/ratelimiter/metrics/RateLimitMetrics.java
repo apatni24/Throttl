@@ -125,6 +125,22 @@ public class RateLimitMetrics {
                 .increment();
     }
 
+    /** A policy decision made in process instead of in Redis. */
+    public void incrementLocalDecision(String source) {
+        Counter.builder("rate_limit_local_decisions_total")
+                .description("Policy evaluations answered without a Redis round trip")
+                .tag("source", source)
+                .register(registry)
+                .increment();
+    }
+
+    public void incrementLeaseUnitsExpired(long units) {
+        Counter.builder("rate_limit_lease_units_expired_total")
+                .description("Leased units that expired unspent (bounded under-admission)")
+                .register(registry)
+                .increment(units);
+    }
+
     public Timer checkLatencyTimer() {
         return checkLatency;
     }

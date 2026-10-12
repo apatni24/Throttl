@@ -55,6 +55,12 @@ public class PolicyEntity {
     @Column(name = "failure_mode", length = 32)
     private FailureMode failureMode;
 
+    @Column(name = "lease_tokens")
+    private Integer leaseTokens;
+
+    @Column(name = "lease_ttl_ms")
+    private Integer leaseTtlMs;
+
     @Column(name = "created_at", nullable = false)
     private Instant createdAt;
 
@@ -143,6 +149,22 @@ public class PolicyEntity {
 
     public void setFailureMode(FailureMode failureMode) {
         this.failureMode = failureMode;
+    }
+
+    public Integer getLeaseTokens() {
+        return leaseTokens;
+    }
+
+    public void setLeaseTokens(Integer leaseTokens) {
+        this.leaseTokens = leaseTokens;
+    }
+
+    public Integer getLeaseTtlMs() {
+        return leaseTtlMs;
+    }
+
+    public void setLeaseTtlMs(Integer leaseTtlMs) {
+        this.leaseTtlMs = leaseTtlMs;
     }
 
     public Instant getCreatedAt() {

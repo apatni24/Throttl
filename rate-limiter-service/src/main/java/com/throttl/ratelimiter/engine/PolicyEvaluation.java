@@ -9,6 +9,8 @@ public record PolicyEvaluation(
     public static final String ALLOWED = "ALLOWED";
     public static final String REJECTED = "REJECTED";
     public static final String SKIPPED = "SKIPPED";
+    /** Allowed by a unit this instance had already leased from Redis; remaining is the local lease. */
+    public static final String LEASED = "LEASED";
     /** Redis unavailable; the policy's failure mode allowed the request. */
     public static final String FAILED_OPEN = "FAILED_OPEN";
     /** Redis unavailable; the policy's failure mode denied the request. */

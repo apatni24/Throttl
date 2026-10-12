@@ -7,6 +7,7 @@ import { Button, ErrorState, Skeleton } from '../components/Ui'
 import type {
   Algorithm,
   FailureMode,
+  LeaseConfiguration,
   Policy,
   RefillPeriod,
   Scope,
@@ -154,17 +155,27 @@ export function PolicyFormPage() {
           <TokenBucketFields
             configuration={policy.strategy.configuration}
             onChange={(configuration) =>
-              setPolicy({ ...policy, strategy: { algorithm: 'TOKEN_BUCKET', configuration } })
+              setPolicy({
+                ...policy,
+                strategy: { algorithm: 'TOKEN_BUCKET', configuration, lease: policy.strategy.lease },
+              })
             }
           />
         ) : (
           <SlidingWindowFields
             configuration={policy.strategy.configuration}
             onChange={(configuration) =>
-              setPolicy({ ...policy, strategy: { algorithm: 'SLIDING_WINDOW', configuration } })
+              setPolicy({
+                ...policy,
+                strategy: { algorithm: 'SLIDING_WINDOW', configuration, lease: policy.strategy.lease },
+              })
             }
           />
         )}
+        <LeaseFields
+          lease={policy.strategy.lease ?? null}
+          onChange={(lease) => setPolicy({ ...policy, strategy: { ...policy.strategy, lease } })}
+        />
       </section>
       <section className="space-y-3">
         <h2 className="text-sm uppercase tracking-wider text-mute">Metadata</h2>
@@ -301,6 +312,48 @@ function SlidingWindowFields({
         At most {configuration.limit} requests in any trailing {configuration.window.toLowerCase()}, with
         no burst at window boundaries.
       </p>
+    </div>
+  )
+}
+
+function LeaseFields({
+  lease,
+  onChange,
+}: {
+  lease: LeaseConfiguration | null
+  onChange: (next: LeaseConfiguration | null) => void
+}) {
+  return (
+    <div className="space-y-2 rounded-md border border-line p-3">
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={lease != null}
+          onChange={(e) => onChange(e.target.checked ? { tokens: 10, ttlMs: 1000 } : null)}
+        />
+        Lease units locally (hot keys)
+      </label>
+      {lease ? (
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <NumberField
+              label="Units per Redis call"
+              value={lease.tokens}
+              onChange={(tokens) => onChange({ ...lease, tokens })}
+            />
+            <NumberField
+              label="Lease TTL (ms)"
+              value={lease.ttlMs}
+              onChange={(ttlMs) => onChange({ ...lease, ttlMs })}
+            />
+          </div>
+          <p className="text-xs text-mute">
+            Each instance takes up to {lease.tokens} units per Redis call and spends them locally for up
+            to {lease.ttlMs} ms. Redis never counts more than the limit; admissions can lag by the TTL and
+            unspent units expire.
+          </p>
+        </>
+      ) : null}
     </div>
   )
 }

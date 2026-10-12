@@ -227,18 +227,15 @@ after=$(docker compose exec -T redis redis-cli EXISTS 'rl:{USER:reset-user}:test
 fresh=$(check '{"userId":"reset-user","api":"test"}')
 echo "$fresh" | grep -q '"remaining":4' && ok "new capacity applied after reset" || bad "fresh $fresh"
 
-note "Policy cache logs"
+note "Policy cache"
 docker compose logs limiter-1 > /tmp/throttl-limiter-1.log 2>&1 || true
 if grep -F "Policy cache MISS" /tmp/throttl-limiter-1.log >/dev/null; then
   ok "saw cache MISS logs"
 else
   bad "cache MISS logs"
 fi
-if grep -F "Policy cache HIT" /tmp/throttl-limiter-1.log >/dev/null; then
-  ok "saw cache HIT logs"
-else
-  bad "cache HIT logs"
-fi
+hits=$(curl -sf http://localhost:8081/actuator/prometheus | awk '/^policy_cache_hits_total/ {print int($2)}')
+[[ "${hits:-0}" -gt 0 ]] && ok "policy_cache_hits_total=$hits" || bad "no cache hits recorded"
 
 note "Prometheus scrape"
 targets=$(curl -sf "$PROM/api/v1/targets")
@@ -277,6 +274,7 @@ for i in $(seq 1 300); do
 done
 echo "    distributed allowed=$allowed denied=$denied (300 requests)"
 [[ "$allowed" -eq 100 ]] && ok "global allow == 100 not 100/instance" || bad "global allow $allowed"
+clear_policies
 
 printf '\nPassed: %s  Failed: %s\n' "$pass" "$fail"
 if [[ "$fail" -gt 0 ]]; then
